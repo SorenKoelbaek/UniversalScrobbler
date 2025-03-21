@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from routers import (auth_router)
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(docs_url="/docs", redoc_url=None, openapi_url=None)
 
 # Serve the entire React build at the root
 app.mount("/", StaticFiles(directory="../ui/build", html=True), name="static")
