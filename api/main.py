@@ -5,12 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
-# Serve the React app
-app.mount(
-    "/",
-    StaticFiles(directory="../ui/build", html=True, check_dir=True),
-    name="static"
-)
+# Mount everything (index.html, favicon, static/) under /ui
+app.mount("/ui", StaticFiles(directory="../ui/build", html=True), name="ui")
 
 @app.get("/api")
 async def read_api():
