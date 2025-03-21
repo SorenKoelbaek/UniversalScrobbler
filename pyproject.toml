@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "universalscrobbler"
+version = "0.1.0"
+description = ""
+authors = ["sorenkoelbaek <soren.iversen@lego.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pytest = "^8.3.3"
+uvicorn = "^0.32.1"
+passlib = "^1.7.4"
+python-jose = "^3.3.0"
+npx = "^0.1.6"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
