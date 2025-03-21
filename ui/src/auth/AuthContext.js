@@ -28,7 +28,7 @@ export const AuthProvider = ({ children }) => {
   const fetchUser = async () => {
     try {
       if (auth?.token) {
-        const response = await axios.get("${apiUrl}/me", {
+        const response = await axios.get(`${apiUrl}/me`, {
           headers: { Authorization: `Bearer ${auth.token}` },
         });
         setUser(response.data);
@@ -47,7 +47,7 @@ export const AuthProvider = ({ children }) => {
       params.append("username", username);
       params.append("password", password);
 
-      const response = await axios.post("${apiUrl}/token", params, {
+      const response = await axios.post(`${apiUrl}/token`, params, {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
       });
 
