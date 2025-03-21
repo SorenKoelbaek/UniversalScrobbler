@@ -5,9 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
-# Mount everything (index.html, favicon, static/) under /ui
-app.mount("/ui", StaticFiles(directory="../ui/build", html=True), name="ui")
-
+# Serve the entire React build at the root
+app.mount("/", StaticFiles(directory="../ui/build", html=True), name="static")
 @app.get("/api")
 async def read_api():
     return {"message": "Hello, API with Poetry and React!"}
