@@ -3,15 +3,20 @@ name: Deploy to Ubuntu Server
 on:
   push:
     tags:
-      - 'v*'  # or use branches like 'main'
+      - 'v*'  # Only trigger on tags starting with 'v' (e.g., v1.0.0, v2.0.1)
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest  # You can change this if you want to specify a different OS
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
+
+    - name: Set up SSH for secure connection
+      uses: webfactory/ssh-agent@v0.5.3
+      with:
+        ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
 
     - name: Run deployment script over SSH
       uses: appleboy/ssh-action@v1.0.0
@@ -29,3 +34,4 @@ jobs:
           cd ../ui
           npm run build
           sudo systemctl restart universalscrobbler.service
+s
