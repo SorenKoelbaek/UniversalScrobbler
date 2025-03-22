@@ -17,7 +17,7 @@ def login():
     auth_url = spotify_service.get_redirect_url()
     return RedirectResponse(auth_url)
 
-@router.post("/authorize")
+@router.post("/callback")
 def authorize_spotify(
     code: str,
     user: User = Depends(get_current_user),
