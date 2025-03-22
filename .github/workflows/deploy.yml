@@ -26,6 +26,7 @@ jobs:
         key: ${{ secrets.SERVER_SSH_KEY }}
         port: 22
         script: |
+          export PATH="$HOME/.local/bin:$PATH"
           cd ~/UniversalScrobbler
           git pull
           cd api
@@ -33,4 +34,4 @@ jobs:
           poetry run alembic upgrade head
           cd ../ui
           npm run build
-          sudo systemctl restart universalscrobbler.service
+          sudo -S systemctl restart universalscrobbler.service
