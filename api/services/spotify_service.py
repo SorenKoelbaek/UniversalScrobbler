@@ -30,7 +30,7 @@ class SpotifyService:
         """
         Generate the Spotify authorization URL.
         """
-        return self.oauth.redirect_uri()
+        return self.oauth.get_authorize_url()
 
     def get_token_for_user(self, user_uuid: str, db: Session) -> str:
         """

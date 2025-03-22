@@ -4,6 +4,7 @@ from dependencies.database import get_session
 from services.spotify_service import SpotifyService
 from sqlmodel import Session, select
 from models.sqlmodels import User
+from fastapi.responses import RedirectResponse
 
 router = APIRouter(
     prefix="/spotify",
@@ -13,8 +14,8 @@ router = APIRouter(
 @router.get("/login")
 def login():
     spotify_service = SpotifyService()
-    auth_url = spotify_service.get_auth_url()
-    return {"auth_url": auth_url}
+    auth_url = spotify_service.get_redirect_url()
+    return RedirectResponse(auth_url)
 
 @router.post("/authorize")
 def authorize_spotify(
