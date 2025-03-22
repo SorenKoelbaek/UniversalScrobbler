@@ -26,6 +26,12 @@ class SpotifyService:
             )
         return cls._instance
 
+    def get_redirect_url(self):
+        """
+        Generate the Spotify authorization URL.
+        """
+        return self.oauth.redirect_uri()
+
     def get_token_for_user(self, user_uuid: str, db: Session) -> str:
         """
         Fetch the valid Spotify access token for a user, refreshing it if expired.

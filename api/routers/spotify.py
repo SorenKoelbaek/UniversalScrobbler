@@ -13,7 +13,7 @@ router = APIRouter(
 @router.get("/login")
 def login():
     spotify_service = SpotifyService()
-    auth_url = spotify_service.login()
+    auth_url = spotify_service.get_auth_url()
     return {"auth_url": auth_url}
 
 @router.post("/authorize")

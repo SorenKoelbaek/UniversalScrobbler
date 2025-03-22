@@ -3,9 +3,10 @@ import AuthContext from "../auth/AuthContext";
 
 const Profile = () => {
   const { user } = useContext(AuthContext);
+  const apiUrl = process.env.REACT_APP_API_URL;
 
   const handleSpotifyAuth = () => {
-    window.location.href = "http://localhost:8000/spotify/login";
+    window.location.href = apiUrl+"/spotify/login";
   };
   const isTokenExpired = (expiresAt) => {
     if (!expiresAt) return true;
