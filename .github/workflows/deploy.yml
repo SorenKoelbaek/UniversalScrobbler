@@ -33,5 +33,6 @@ jobs:
           poetry install --no-root
           poetry run alembic upgrade head
           cd ../ui
+          npm install
           npm run build
           sudo -S systemctl restart uvicorn.service

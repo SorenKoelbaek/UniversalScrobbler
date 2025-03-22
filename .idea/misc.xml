@@ -3,8 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="Poetry (UniversalScrobbler) (2)" />
   </component>
-  <component name="GithubDefaultAccount">
-    <option name="defaultAccountId" value="89dbf866-1238-4fe8-9572-47984b87218a" />
-  </component>
   <component name="ProjectRootManager" version="2" project-jdk-name="Poetry (UniversalScrobbler)" project-jdk-type="Python SDK" />
 </project>
