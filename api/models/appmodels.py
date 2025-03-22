@@ -1,0 +1,44 @@
+from typing import Optional, List
+from uuid import UUID
+from pydantic import BaseModel, EmailStr
+from datetime import datetime
+
+
+class PlaybackHistoryBase(BaseModel):
+    spotify_track_id: Optional[str]
+    track_name: str
+    artist_name: str
+    album_name: str
+    discogs_release_id: Optional[int]
+    played_at: datetime
+    source: str = "spotify"
+    device_name: Optional[str] = None
+
+class PlaybackHistoryRead(PlaybackHistoryBase):
+    playback_history_uuid: UUID
+
+class SpotifyTokenRead(BaseModel):
+    spotify_token_uuid: UUID
+    expires_at: datetime
+
+class UserBase(BaseModel):
+    """Base model for a user."""
+    username: str
+    email: str
+    status: Optional[str] = None
+
+
+class UserRead(UserBase):
+    """Model for reading user details."""
+    user_uuid: UUID
+    spotify_token: Optional[SpotifyTokenRead]
+
+
+class UserCreate(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+
+class SpotifyAuthRequest(BaseModel):
+    code: str
+
