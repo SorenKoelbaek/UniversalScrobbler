@@ -34,4 +34,4 @@ jobs:
           poetry run alembic upgrade head
           cd ../ui
           npm run build
-          sudo -S systemctl restart uvicorn.service
+          sudo systemctl restart uvicorn.service
