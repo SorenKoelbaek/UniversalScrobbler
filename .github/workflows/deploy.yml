@@ -30,8 +30,8 @@ jobs:
           cd ~/UniversalScrobbler
           git pull
           cd api
-          poetry install
+          poetry install --no-root
           poetry run alembic upgrade head
           cd ../ui
           npm run build
-          sudo -S systemctl restart universalscrobbler.service
+          sudo -S systemctl restart uvicorn.service
