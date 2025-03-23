@@ -10,9 +10,6 @@ const SpotifyCallback = () => {
 
   useEffect(() => {
     const code = searchParams.get("code");
-    console.log("SPOTIFY CALLBACK");
-    console.log("code:", code);
-    console.log("user:", user);
 
     if (!code || !user) {
       console.error("Missing code or user context");
