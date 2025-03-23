@@ -42,7 +42,7 @@ class SpotifyService:
             existing.expires_at = expires_at
         else:
             new_token = SpotifyToken(
-                user_uuid=user.user_uuid,
+                user_uuid=user_uuid,
                 access_token=token_info["access_token"],
                 refresh_token=token_info["refresh_token"],
                 expires_at=expires_at,
