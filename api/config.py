@@ -10,7 +10,7 @@ settings = Dynaconf(
 
 log_level = logging.WARNING
 if settings.LOCAL == 'true':
-    log_level = logging.DEBUG
+    log_level = logging.INFO
 
 
 def setup_logging():

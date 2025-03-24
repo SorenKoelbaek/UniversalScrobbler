@@ -33,7 +33,7 @@ def gather_all_playbacks():
         for user in users:
             user_uuid = user.user_uuid
             logger.info(f"🎧 Gathering playback history for user {user_uuid}...")
-            gather_playback_for_user(session, user_uuid, limit=5)
+            gather_playback_for_user(session, user_uuid, limit=50)
 
 if __name__ == "__main__":
     gather_all_playbacks()
