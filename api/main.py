@@ -9,9 +9,18 @@ import asyncio
 from scripts.gather_playback import gather_all_playbacks
 import logging
 
+
 logger = logging.getLogger(__name__)
 
-app = FastAPI(docs_url="/docs", redoc_url=None, openapi_url="/openapi.json")
+show_docs = settings.LOCAL == "true"
+
+
+app = FastAPI(
+    title="My App",
+    docs_url="/docs" if show_docs else None,
+    redoc_url="/redoc" if show_docs else None,
+    openapi_url="/openapi.json" if show_docs else None,
+)
 
 app.add_middleware(
     CORSMiddleware,
