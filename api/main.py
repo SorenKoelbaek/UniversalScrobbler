@@ -9,10 +9,10 @@ import asyncio
 from scripts.gather_playback import gather_all_playbacks
 import logging
 
-
 logger = logging.getLogger(__name__)
 
 show_docs = settings.LOCAL == "true"
+
 
 
 app = FastAPI(
@@ -37,7 +37,7 @@ app.include_router(auth_router.router)
 app.include_router(spotify.router)
 app.include_router(consumption.router)
 
-logging.warning(f"🧪 ENV_FOR_DYNACONF = {settings.current_env}")
+logging.info(f"Starting with environment = {settings.current_env}")
 
 @app.on_event("startup")
 async def startup_event():
