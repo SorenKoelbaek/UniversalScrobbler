@@ -12,6 +12,7 @@ const UserMenu = () => {
       <button onClick={() => setOpen(!open)}>☰</button>
       {open && (
         <div className="menu-dropdown">
+          <Link to="/dashboard" onClick={() => setOpen(false)}>Dashboard</Link>
           <Link to="/profile" onClick={() => setOpen(false)}>Profile</Link>
           <button onClick={logout}>Bye!</button>
         </div>

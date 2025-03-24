@@ -141,48 +141,76 @@ class SpotifyService:
 
         return existing is not None
 
-    def gather_user_playback_history(self, user_uuid: str, db: Session, limit: int = 5):
+    def gather_user_playback_history(self, user_uuid: str, db: Session, limit: int = 50):
         """
-        Gather recent playback history for a user (can be called by gatherer or API).
+        Gather recent playback history for a user, using recursive fetch from last known playback.
         """
         token = self.get_token_for_user(user_uuid, db)
         sp_client = self.get_client(token)
 
+        from datetime import timezone
+
+        # Get most recent scrobble for this user
+        latest_play = db.exec(
+            select(PlaybackHistory.played_at)
+            .where(PlaybackHistory.user_uuid == user_uuid)
+            .order_by(PlaybackHistory.played_at.desc())
+        ).first()
+
+        after = None
+        if latest_play:
+            after_dt = latest_play.replace(tzinfo=timezone.utc)
+            after = int(after_dt.timestamp() * 1000)  # milliseconds
+
+        total_added = 0
+
         try:
-            # Fetch the recently played tracks with the given limit
-            recently_played = sp_client.current_user_recently_played(limit=limit)
+            while True:
+                params = {"limit": limit}
+                if after:
+                    params["after"] = after
 
-            for item in recently_played["items"]:
-                track = item["track"]
-                played_at = datetime.fromisoformat(item["played_at"].replace("Z", "+00:00"))
+                recently_played = sp_client._get("me/player/recently-played", **params)
 
-                # Skip already scrobbled tracks
-                if self.track_already_scrobbled(db, user_uuid, track["id"], played_at):
-                    continue
+                items = recently_played.get("items", [])
+                if not items:
+                    break
 
-                duration_ms = track["duration_ms"]
-                scrobble_min_duration = 30 * 1000  # only scrobble tracks longer than 30s
+                added_this_round = 0
+                for item in items:
+                    track = item["track"]
+                    played_at = datetime.fromisoformat(item["played_at"].replace("Z", "+00:00"))
 
-                if duration_ms < scrobble_min_duration:
-                    continue  # skip intros or broken scrobbles
+                    if self.track_already_scrobbled(db, user_uuid, track["id"], played_at):
+                        continue
 
-                # Add valid playback to history
-                playback_history = PlaybackHistory(
-                    user_uuid=user_uuid,
-                    track_name=track["name"],
-                    artist_name=track["artists"][0]["name"],
-                    album_name=track["album"]["name"],
-                    spotify_track_id=track["id"],
-                    played_at=played_at,
-                    source="spotify",
-                    device_name=None,  # extend this later via device lookup
-                    discogs_release_id=None,  # future enhancement
-                )
+                    if track["duration_ms"] < 30_000:
+                        continue
 
-                db.add(playback_history)
-                logger.info(f"✅ Scrobbled: {track['name']} by {track['artists'][0]['name']}")
+                    playback_history = PlaybackHistory(
+                        user_uuid=user_uuid,
+                        track_name=track["name"],
+                        artist_name=track["artists"][0]["name"],
+                        album_name=track["album"]["name"],
+                        spotify_track_id=track["id"],
+                        played_at=played_at,
+                        source="spotify",
+                        device_name=None,
+                        discogs_release_id=None,
+                    )
 
-            db.commit()
+                    db.add(playback_history)
+                    logger.info(f"✅ Scrobbled: {track['name']} by {track['artists'][0]['name']}")
+                    added_this_round += 1
+                    total_added += 1
+
+                db.commit()
+
+                if len(items) < limit or added_this_round == 0:
+                    break  # no more to fetch or no new additions
+
+                # Continue with next batch after last played_at
+                after = int(items[-1]["played_at"].replace("Z", "+00:00").timestamp() * 1000)
 
         except Exception as e:
             logger.error(f"Error gathering playback history for user {user_uuid}: {e}")

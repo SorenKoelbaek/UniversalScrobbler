@@ -20,7 +20,7 @@ def gather_playback_for_user(session: Session, user_uuid: str, limit: int):
         logger.error(f"Error gathering playback history for user {user_uuid}: {e}")
         raise
 
-def main():
+def gather_all_playbacks():
     engine = _get_engine(True)
     with Session(engine) as session:
         users = session.exec(select(User)).all()  # Get all users
@@ -36,4 +36,4 @@ def main():
             gather_playback_for_user(session, user_uuid, limit=5)
 
 if __name__ == "__main__":
-    main()
+    gather_all_playbacks()

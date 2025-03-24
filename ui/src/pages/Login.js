@@ -3,6 +3,7 @@ import { TextField, Button, Box, Typography } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 import AuthContext from "../auth/AuthContext";
 
+
 const Login = () => {
   const { login } = useContext(AuthContext);
   const [username, setUsername] = useState("");
@@ -10,11 +11,13 @@ const Login = () => {
   const [error, setError] = useState("");
   const navigate = useNavigate();
 
+
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
       await login(username, password);
-      navigate("/"); // Redirect after successful login
+      navigate("/dashboard"); // Redirect after successful login
     } catch (err) {
       setError("Invalid username or password");
     }

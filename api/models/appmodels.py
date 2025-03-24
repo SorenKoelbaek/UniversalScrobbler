@@ -1,7 +1,7 @@
 from typing import Optional, List
 from uuid import UUID
-from pydantic import BaseModel, EmailStr
-from datetime import datetime
+from pydantic import BaseModel, EmailStr, field_serializer
+from datetime import datetime, timezone
 
 
 class PlaybackHistoryBase(BaseModel):
@@ -20,6 +20,10 @@ class PlaybackHistoryRead(PlaybackHistoryBase):
 class SpotifyTokenRead(BaseModel):
     spotify_token_uuid: UUID
     expires_at: datetime
+
+    @field_serializer("expires_at")
+    def serialize_expires_at(self, dt: datetime, _info) -> str:
+        return dt.replace(tzinfo=timezone.utc).isoformat()
 
 class UserBase(BaseModel):
     """Base model for a user."""

@@ -1,2 +1,5 @@
 [default]
 LOCAL = "true"
+
+[prod]
+LOCAL = "false"

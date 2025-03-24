@@ -50,8 +50,6 @@ export const AuthProvider = ({ children }) => {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
       });
 
-      console.log("login response", response.data); // ← Add this
-
       const { access_token } = response.data;
       const decoded = jwtDecode(access_token);
 

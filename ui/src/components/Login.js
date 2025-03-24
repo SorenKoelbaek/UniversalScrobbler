@@ -1,18 +1,22 @@
 import React, { useState, useContext } from "react";
 import AuthContext from "../auth/AuthContext";
+import {useSnackbar} from "../contexts/SnackbarContext";
+import { useSnackbar } from "../contexts/SnackbarContext";
+
 
 const Login = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const { login } = useContext(AuthContext);
+  const { showSnackbar } = useSnackbar();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
       await login(username, password);
-      alert("Login successful!");
+      showSnackbar("Login successful!","success");
     } catch (err) {
-      alert("Login failed!");
+      showSnackbar("Login failed!","error");
     }
   };
 

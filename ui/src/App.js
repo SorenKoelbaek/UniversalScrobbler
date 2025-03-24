@@ -4,9 +4,12 @@ import { AppBar, Toolbar, Typography, Button, Box } from "@mui/material";
 import Login from "./pages/Login";
 import AuthContext from "./auth/AuthContext";
 import UserMenu from "./components/UserMenu";
-import Profile from "./pages/Profile"; // near the top with other imports
+import Profile from "./pages/Profile";
 import Dashboard from "./pages/Dashboard";
+import Landing from "./pages/Landing";
 import SpotifyCallback from "./pages/SpotifyCallback";
+import ProtectedRoute from "./auth/ProtectedRoute"; // ⬅️ Ensure this is already imported
+
 
 
 const App = () => {
@@ -21,7 +24,6 @@ const App = () => {
           auth?.user &&
           location.pathname === "/" // Only redirect if on the main page
           ) {
-        console.log("Hello",auth?.user)
       }
     }, [auth, user, loading, navigate]);
 
@@ -29,13 +31,13 @@ const App = () => {
       <>
       <AppBar position="static" sx={{ backgroundColor: "#4caf50" }}>
         <Toolbar>
-         <Typography
-          variant="h6"
-          sx={{ flexGrow: 1, cursor: "pointer", textDecoration: "none", color: "inherit" }}
-          component={Link}
-          to="/"
-        >
-          Universal Scrobbler
+         <Typography variant="h6" sx={{ flexGrow: 1 }}>
+          <Link
+            to="/"
+            style={{ textDecoration: "none", color: "inherit", cursor: "pointer" }}
+          >
+            Universal Scrobbler
+          </Link>
         </Typography>
           {auth?.user ? (
             <UserMenu />
@@ -48,10 +50,25 @@ const App = () => {
       </AppBar>
       <Box sx={{ padding: 2 }}>
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
-          <Route path="/profile" element={<Profile />} />
           <Route path="/spotify/callback" element={<SpotifyCallback />} />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+              path="/profile"
+              element={
+                <ProtectedRoute>
+                  <Profile />
+                </ProtectedRoute>
+              }
+            />
         </Routes>
       </Box>
     </>
