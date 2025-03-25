@@ -55,4 +55,4 @@ async def run_gatherer():
         except Exception as e:
             logger.error(f"[GATHERER] Error during gathering: {e}")
 
-        await asyncio.sleep(15)
+        await asyncio.sleep(5)

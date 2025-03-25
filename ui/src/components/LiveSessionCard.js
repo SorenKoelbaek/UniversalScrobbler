@@ -1,3 +1,4 @@
+// LiveSessionCard.js
 import React, { useEffect, useState } from "react";
 import {
   Card,
@@ -5,10 +6,12 @@ import {
   Typography,
   Chip,
   Stack,
-  LinearProgress,
+  Box,
 } from "@mui/material";
-import apiClient from "../utils/apiClient"; // Import your apiClient
-import { fetchEventSource } from '@microsoft/fetch-event-source';
+import { fetchEventSource } from "@microsoft/fetch-event-source";
+import StreamIcon from "@mui/icons-material/Stream";
+import HeartBrokenIcon from "@mui/icons-material/HeartBroken";
+import "./LiveSessionCard.css";
 
 const LiveSessionCard = ({ token }) => {
   const [connected, setConnected] = useState(false);
@@ -16,15 +19,14 @@ const LiveSessionCard = ({ token }) => {
   const [progressMs, setProgressMs] = useState(0);
 
   useEffect(() => {
-    // Function to get SSE stream with the token
     const fetchSSEStream = async () => {
       const sseUrl = `${process.env.REACT_APP_API_URL}/events`;
 
       try {
         await fetchEventSource(sseUrl, {
-          method: "GET", // Define the HTTP method
+          method: "GET",
           headers: {
-            "Authorization": `Bearer ${token}`, // Attach the Bearer token in the request headers
+            Authorization: `Bearer ${token}`,
           },
           onopen: (response) => {
             if (response.ok) {
@@ -34,21 +36,42 @@ const LiveSessionCard = ({ token }) => {
             }
           },
           onmessage: (event) => {
+            if (!event.data || event.data.trim() === "") return;
+
             try {
               const msg = JSON.parse(event.data);
-
+              console.log(msg);
               if (msg.type === "current_play" && msg.data) {
-                const { track_name, artist_name, album_name, duration_ms, progress_ms, is_still_playing } = msg.data;
-
-                setCurrentTrack({
+                const {
+                  spotify_track_id,
                   track_name,
                   artist_name,
                   album_name,
+                  discogs_release_id,
+                  played_at,
+                  source,
+                  device_name,
+                  progress_ms,
                   duration_ms,
+                  full_play,
+                  is_still_playing,
+                } = msg.data;
+
+                setCurrentTrack({
+                  spotify_track_id,
+                  track_name,
+                  artist_name,
+                  album_name,
+                  discogs_release_id,
+                  played_at,
+                  source,
+                  device_name,
+                  progress_ms,
+                  duration_ms,
+                  full_play,
                   is_still_playing,
                 });
 
-                setProgressMs(progress_ms || 0);
               }
             } catch (err) {
               console.log("📨 Non-JSON message:", event.data);
@@ -68,43 +91,65 @@ const LiveSessionCard = ({ token }) => {
     };
 
     fetchSSEStream();
-
   }, [token]);
 
-  const progressPercent =
-    currentTrack?.duration_ms > 0
-      ? Math.min((progressMs / currentTrack.duration_ms) * 100, 100)
-      : 0;
+  const isPlaying = currentTrack?.is_still_playing;
 
   return (
     <Card sx={{ maxWidth: 400 }}>
       <CardContent>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" mb={1}>
-          <Typography variant="h6">Live Session</Typography>
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+          mb={2}
+        >
+          <Typography variant="h6">Now spinning:</Typography>
           <Chip
-            label={connected ? "Connected" : "Disconnected"}
+            icon={
+              connected ? (
+                <StreamIcon sx={{ color: "white" }} />
+              ) : (
+                <HeartBrokenIcon sx={{ color: "white" }} />
+              )
+            }
+            label=""
             color={connected ? "success" : "error"}
             size="small"
+            sx={{ px: 1 }}
           />
         </Stack>
 
         {currentTrack ? (
-          <>
-            <Typography><strong>Track:</strong> {currentTrack.track_name}</Typography>
-            <Typography><strong>Artist:</strong> {currentTrack.artist_name}</Typography>
-            <Typography><strong>Album:</strong> {currentTrack.album_name}</Typography>
+          <Box
+            sx={{
+              position: "relative",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              height: 300,
+            }}
+          >
+            {/* Animated Aura Ring */}
+            <div className={`ring ${!isPlaying ? "paused" : ""}`}>
+              <i style={{ "--clr": "#00ff0a" }}></i>
+              <i style={{ "--clr": "#ff0057" }}></i>
+              <i style={{ "--clr": "#fffd44" }}></i>
 
-            <Stack mt={2}>
-              <LinearProgress
-                variant="determinate"
-                value={progressPercent}
-              />
-              <Typography variant="caption" color="textSecondary">
-                {Math.floor(progressMs / 1000)}s /{" "}
-                {Math.floor(currentTrack.duration_ms / 1000)}s
-              </Typography>
-            </Stack>
-          </>
+              {/* Vinyl Center */}
+              <div className="vinyl">
+                <Typography variant="subtitle1" fontWeight="bold" color="white">
+                  {currentTrack.track_name}
+                </Typography>
+                <Typography variant="body2" sx={{ opacity: 0.8 }} color="white">
+                  {currentTrack.artist_name}
+                </Typography>
+                <Typography variant="caption" sx={{ opacity: 0.6 }} color="white">
+                  {currentTrack.album_name}
+                </Typography>
+              </div>
+            </div>
+          </Box>
         ) : (
           <Typography variant="body2" color="textSecondary">
             No track playing.

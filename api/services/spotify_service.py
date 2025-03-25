@@ -9,6 +9,7 @@ from config import settings
 from services.connection_manager import manager
 from models.appmodels import CurrentlyPlaying
 import logging
+from typing import Optional
 import json
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,34 @@ class SpotifyService:
     def should_scrobble(self, track: dict) -> bool:
         return track.get("progress_ms", 0) >= 30_000
 
+    async def get_currently_playing_state(self, user_uuid: str, db: AsyncSession) -> Optional[CurrentlyPlaying]:
+        result = await db.exec(
+            select(PlaybackHistory)
+            .where(
+                PlaybackHistory.user_uuid == user_uuid,
+                PlaybackHistory.is_still_playing == True
+            )
+            .order_by(PlaybackHistory.played_at.desc())
+        )
+        latest = result.first()
+
+        if latest:
+            return CurrentlyPlaying(
+                spotify_track_id=latest.spotify_track_id,
+                track_name=latest.track_name,
+                artist_name=latest.artist_name,
+                album_name=latest.album_name,
+                discogs_release_id=latest.discogs_release_id,
+                played_at=latest.played_at,
+                source=latest.source,
+                device_name=latest.device_name,
+                progress_ms=latest.progress_ms,
+                duration_ms=latest.duration_ms,
+                full_play=latest.full_play,
+                is_still_playing=latest.is_still_playing
+            )
+        return None
+
     async def track_already_scrobbled(self, db: AsyncSession, user_uuid: str, track_id: str, played_at: datetime) -> bool:
         result = await db.exec(
             select(PlaybackHistory).where(
@@ -110,7 +139,6 @@ class SpotifyService:
         try:
             track_info = playback["item"]
             progress_ms = playback.get("progress_ms", 0)
-            played_at = datetime.utcnow() - timedelta(milliseconds=progress_ms)
             artist = track_info["artists"][0]
             album = track_info["album"]
             track_name = track_info["name"]
@@ -120,28 +148,49 @@ class SpotifyService:
             device_name = playback.get("device", {}).get("name", "unknown")
             duration_ms = track_info.get("duration_ms")
             still_playing = playback.get("is_playing", False)
+            timestamp = playback.get("timestamp", int(datetime.utcnow().timestamp() * 1000))
+            played_at = datetime.utcfromtimestamp(timestamp / 1000.0)
 
             logger.info(
-                f"🎧 should I scrobble {track_name} by {artist_name} for user {user_uuid} - been playing for {progress_ms}ms?"
+                f"🎧 Polling: {track_name} by {artist_name} for user {user_uuid} - progress {progress_ms}ms"
             )
 
-            full_play = self.should_scrobble(playback)
+            current_state = await self.get_currently_playing_state(user_uuid, db)
 
-            tolerance = timedelta(seconds=10)
-            lower_bound = played_at - tolerance
-            upper_bound = played_at + tolerance
-
-            result = await db.exec(
-                select(PlaybackHistory).where(
-                    PlaybackHistory.user_uuid == user_uuid,
-                    PlaybackHistory.spotify_track_id == track_id,
-                    PlaybackHistory.played_at.between(lower_bound, upper_bound)
+            if current_state and current_state.spotify_track_id == track_id:
+                logger.debug(f"🔁 Updating current session for {track_name}")
+                result = await db.exec(
+                    select(PlaybackHistory)
+                    .where(
+                        PlaybackHistory.user_uuid == user_uuid,
+                        PlaybackHistory.spotify_track_id == track_id,
+                        PlaybackHistory.is_still_playing == True
+                    )
+                    .order_by(PlaybackHistory.played_at.desc())
                 )
-            )
-            existing = result.first()
+                current_session = result.first()
+                if current_session:
+                    current_session.progress_ms = progress_ms
+                    current_session.is_still_playing = still_playing
+                    db.add(current_session)
 
-            if not existing:
-                # New scrobble, add to DB
+            else:
+                logger.info(f"▶️ New track for user {user_uuid}: {track_name}")
+
+                if current_state:
+                    result = await db.exec(
+                        select(PlaybackHistory)
+                        .where(
+                            PlaybackHistory.user_uuid == user_uuid,
+                            PlaybackHistory.spotify_track_id == current_state.spotify_track_id,
+                            PlaybackHistory.is_still_playing == True
+                        )
+                    )
+                    old_session = result.first()
+                    if old_session:
+                        old_session.is_still_playing = False
+                        db.add(old_session)
+
                 scrobble = PlaybackHistory(
                     user_uuid=user_uuid,
                     spotify_track_id=track_id,
@@ -153,15 +202,10 @@ class SpotifyService:
                     device_name=device_name,
                     duration_ms=duration_ms,
                     progress_ms=progress_ms,
-                    full_play=full_play,
+                    full_play=False,  # Always false for now
                     is_still_playing=still_playing
                 )
                 db.add(scrobble)
-            else:
-                # Update existing scrobble
-                existing.progress_ms = progress_ms
-                existing.full_play = full_play
-                db.add(existing)
 
             await db.commit()
 
@@ -177,15 +221,17 @@ class SpotifyService:
                     duration_ms=duration_ms,
                     progress_ms=progress_ms,
                     is_still_playing=still_playing,
-                    full_play=full_play,
+                    full_play=False,
                     discogs_release_id=None,
                 )
                 await manager.send_to_user(user_uuid, {
                     "type": "current_play",
                     "data": now_playing.model_dump(mode="json")
                 })
-            logger.info(f"✅ Scrobbled: {track_name} by {artist_name} for user {user_uuid}")
+
+            logger.info(f"✅ Tracked: {track_name} by {artist_name} for user {user_uuid}")
 
         except Exception as e:
             logger.warning(f"⚠️ Error polling user {user_uuid}: {e}")
+
 

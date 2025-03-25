@@ -67,27 +67,20 @@ class PlaybackHistoryService:
         result = await self.db.exec(statement)
         record = result.first()
 
-        if not record:
-            return None
-
-        duration = record.duration_ms or 0
-        progress = record.progress_ms or 0
-        time_since_play = (datetime.utcnow() - record.played_at).total_seconds() * 1000
-        is_playing = time_since_play < (duration + 1000)
-
-        return CurrentlyPlaying(
-            spotify_track_id=record.spotify_track_id,
-            track_name=record.track_name,
-            artist_name=record.artist_name,
-            album_name=record.album_name,
-            discogs_release_id=record.discogs_release_id,
-            played_at=record.played_at,
-            source=record.source,
-            device_name=record.device_name,
-            duration_ms=record.duration_ms,
-            progress_ms=record.progress_ms,
-            is_still_playing=is_playing
-        )
+        if record:
+            return CurrentlyPlaying(
+                spotify_track_id=record.spotify_track_id,
+                track_name=record.track_name,
+                artist_name=record.artist_name,
+                album_name=record.album_name,
+                discogs_release_id=record.discogs_release_id,
+                played_at=record.played_at,
+                source=record.source,
+                device_name=record.device_name,
+                duration_ms=record.duration_ms,
+                progress_ms=record.progress_ms,
+                is_still_playing=record.is_still_playing,
+            )
 
     async def get_current_play_message(self, user: User) -> dict:
         current_play: Optional[CurrentlyPlaying] = await self.get_currently_playing(user)
