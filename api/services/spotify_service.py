@@ -104,8 +104,9 @@ class SpotifyService:
 
     async def gather_user_playback_history(self, user_uuid: str, db: AsyncSession, limit: int = 50):
         playback = await self.get_current_playback(user_uuid, db)
-        if not isinstance(playback, dict)  or "item" not in playback:
+        if not isinstance(playback, dict) or "item" not in playback:
             return
+
         try:
             track_info = playback["item"]
             progress_ms = playback.get("progress_ms", 0)
@@ -140,6 +141,7 @@ class SpotifyService:
             existing = result.first()
 
             if not existing:
+                # New scrobble, add to DB
                 scrobble = PlaybackHistory(
                     user_uuid=user_uuid,
                     spotify_track_id=track_id,
@@ -152,16 +154,17 @@ class SpotifyService:
                     duration_ms=duration_ms,
                     progress_ms=progress_ms,
                     full_play=full_play,
-                    is_still_playing = still_playing
+                    is_still_playing=still_playing
                 )
                 db.add(scrobble)
             else:
+                # Update existing scrobble
                 existing.progress_ms = progress_ms
                 existing.full_play = full_play
                 db.add(existing)
 
             await db.commit()
-            logger.info(manager)
+
             if manager.has_connections(user_uuid):
                 now_playing = CurrentlyPlaying(
                     spotify_track_id=track_id,
@@ -177,13 +180,12 @@ class SpotifyService:
                     full_play=full_play,
                     discogs_release_id=None,
                 )
-
-                await manager.send_to_user_async(user_uuid, {
+                await manager.send_to_user(user_uuid, {
                     "type": "current_play",
                     "data": now_playing.model_dump(mode="json")
                 })
-
             logger.info(f"✅ Scrobbled: {track_name} by {artist_name} for user {user_uuid}")
 
         except Exception as e:
             logger.warning(f"⚠️ Error polling user {user_uuid}: {e}")
+

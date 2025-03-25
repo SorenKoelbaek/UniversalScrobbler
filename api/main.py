@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from routers import (auth_router, spotify, consumption)
-from routers import websocket as websocket_router
-
+from routers import event
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -38,7 +37,7 @@ app.add_middleware(
 app.include_router(spotify.router)
 app.include_router(consumption.router)
 
-app.include_router(websocket_router.router)
+app.include_router(event.router)
 app.include_router(auth_router.router)
 
 logging.info(f"Starting with environment = {settings.current_env}")

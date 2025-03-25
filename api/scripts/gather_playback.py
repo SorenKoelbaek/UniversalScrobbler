@@ -20,7 +20,6 @@ async def gather_playback_for_user(session: Session, user_uuid: str, limit: int)
 
 
 async def gather_all_playbacks():
-    logger.info(f"HELLO?!?")
     engine = get_async_engine()
     async with AsyncSession(engine) as session:
         result = await session.exec(select(User))

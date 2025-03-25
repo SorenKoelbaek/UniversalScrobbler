@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Card,
   CardContent,
@@ -7,73 +7,69 @@ import {
   Stack,
   LinearProgress,
 } from "@mui/material";
+import apiClient from "../utils/apiClient"; // Import your apiClient
+import { fetchEventSource } from '@microsoft/fetch-event-source';
 
 const LiveSessionCard = ({ token }) => {
   const [connected, setConnected] = useState(false);
   const [currentTrack, setCurrentTrack] = useState(null);
   const [progressMs, setProgressMs] = useState(0);
-  const intervalRef = useRef(null);
-
-  const wsUrl = `${process.env.REACT_APP_WS_URL}?token=${token}`;
 
   useEffect(() => {
-    const ws = new WebSocket(wsUrl);
+    // Function to get SSE stream with the token
+    const fetchSSEStream = async () => {
+      const sseUrl = `${process.env.REACT_APP_API_URL}/events`;
 
-    ws.onopen = () => {
-      console.log("✅ WebSocket connected");
-      setConnected(true);
-      ws.send("Hello from dashboard");
-    };
-
-    ws.onmessage = (event) => {
       try {
-        const msg = JSON.parse(event.data);
-        console.log(msg);
-        if (msg.type === "current_play" && msg.data) {
-          const { track_name, artist_name, album_name, duration_ms, progress_ms, is_still_playing } = msg.data;
+        await fetchEventSource(sseUrl, {
+          method: "GET", // Define the HTTP method
+          headers: {
+            "Authorization": `Bearer ${token}`, // Attach the Bearer token in the request headers
+          },
+          onopen: (response) => {
+            if (response.ok) {
+              setConnected(true);
+            } else {
+              console.error("Failed to connect to SSE");
+            }
+          },
+          onmessage: (event) => {
+            try {
+              const msg = JSON.parse(event.data);
 
-          setCurrentTrack({
-            track_name,
-            artist_name,
-            album_name,
-            duration_ms,
-            is_still_playing,
-          });
+              if (msg.type === "current_play" && msg.data) {
+                const { track_name, artist_name, album_name, duration_ms, progress_ms, is_still_playing } = msg.data;
 
-          setProgressMs(progress_ms || 0);
+                setCurrentTrack({
+                  track_name,
+                  artist_name,
+                  album_name,
+                  duration_ms,
+                  is_still_playing,
+                });
 
-          // Reset timer if needed
-          if (intervalRef.current) clearInterval(intervalRef.current);
-
-          if (is_still_playing) {
-            intervalRef.current = setInterval(() => {
-              setProgressMs((prev) => {
-                if (duration_ms && prev < duration_ms) {
-                  return prev + 1000;
-                } else {
-                  clearInterval(intervalRef.current);
-                  return prev;
-                }
-              });
-            }, 1000);
-          }
-        }
-      } catch (err) {
-        console.log("📨 Non-JSON message:", event.data);
+                setProgressMs(progress_ms || 0);
+              }
+            } catch (err) {
+              console.log("📨 Non-JSON message:", event.data);
+            }
+          },
+          onclose: () => {
+            console.log("❌ SSE disconnected");
+            setConnected(false);
+          },
+          onerror: (err) => {
+            console.error("SSE Error: ", err);
+          },
+        });
+      } catch (error) {
+        console.error("Error with SSE connection: ", error);
       }
     };
 
-    ws.onclose = () => {
-      console.log("❌ WebSocket disconnected");
-      setConnected(false);
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
+    fetchSSEStream();
 
-    return () => {
-      ws.close();
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [wsUrl]);
+  }, [token]);
 
   const progressPercent =
     currentTrack?.duration_ms > 0
