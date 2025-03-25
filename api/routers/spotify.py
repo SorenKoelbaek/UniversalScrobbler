@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends
 from dependencies.auth import get_current_user
-from dependencies.database import get_session
+from dependencies.database import get_async_session
 from services.spotify_service import SpotifyService
 from sqlmodel import Session, select
 from models.sqlmodels import User
 from models.appmodels import SpotifyAuthRequest
 from fastapi.responses import RedirectResponse
+from dependencies.database import get_async_session
 
 router = APIRouter(
     prefix="/spotify",
@@ -20,28 +21,28 @@ def login():
     return RedirectResponse(auth_url)
 
 @router.post("/authorize")
-def authorize_spotify(
+async def authorize_spotify(
     payload: SpotifyAuthRequest,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_async_session)
 ):
     return spotify_service.add_token_for_user(payload.code, user.user_uuid, db)
 
 
 
 @router.get("/playback")
-def get_current_playback(
+async def get_current_playback(
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: Session = Depends(get_async_session),
 ):
     spotify_service = SpotifyService()
     playback = spotify_service.get_current_playback(user.user_uuid, db)
     return playback
 
 @router.get("/top-tracks")
-def get_top_tracks(
+async def get_top_tracks(
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: Session = Depends(get_async_session),
     days: int = 7
 ):
     spotify_service = SpotifyService()
@@ -49,9 +50,9 @@ def get_top_tracks(
     return top_tracks
 
 @router.post("/gather-playback")
-def gather_playback_for_user(
+async def gather_playback_for_user(
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_session),
+    db: Session = Depends(get_async_session),
     limit: int = 5  # Set default limit to 5
 ):
     spotify_service = SpotifyService()

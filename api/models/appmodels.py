@@ -13,12 +13,19 @@ class PlaybackHistoryBase(BaseModel):
     played_at: datetime
     source: str = "spotify"
     device_name: Optional[str] = None
+    progress_ms: Optional[int]
+    duration_ms: Optional[int]
+    full_play: Optional[bool] = False
+
+class CurrentlyPlaying(PlaybackHistoryBase):
+    is_still_playing: bool
 
 class PlaybackHistoryRead(PlaybackHistoryBase):
     playback_history_uuid: UUID
 
 class SpotifyTokenRead(BaseModel):
     spotify_token_uuid: UUID
+    access_token: str
     expires_at: datetime
 
     @field_serializer("expires_at")

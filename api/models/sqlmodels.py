@@ -56,5 +56,8 @@ class PlaybackHistory(SQLModel, table=True):
     played_at: datetime
     source: str = "spotify"  # Optional discriminator later
     device_name: Optional[str] = None  # optional: add device_id if needed
-
+    duration_ms: Optional[int] = None
+    progress_ms: Optional[int] = None
+    full_play: bool = False
+    is_still_playing: bool = False
     user: Optional["User"] = Relationship(back_populates="playback_history")

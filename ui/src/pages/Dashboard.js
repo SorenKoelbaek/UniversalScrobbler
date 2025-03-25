@@ -1,9 +1,14 @@
-import React from "react";
+import React, { useContext } from "react";
 import { Grid, Container, Card, CardContent, Typography } from "@mui/material";
 import TrackCountBarChart from "../components/TrackCountBarChart";
 import TopTracksCard from "../components/TopTracksCard";
+import LiveSessionCard from "../components/LiveSessionCard";
+import AuthContext from "../auth/AuthContext";
+
 
 const Dashboard = () => {
+  const { auth } = useContext(AuthContext);
+
   return (
     <Container maxWidth="lg" sx={{ mt: 4 }}>
       <Grid container spacing={2}>
@@ -26,10 +31,7 @@ const Dashboard = () => {
         <Grid item xs={12} sm={6} md={4}>
           <Card>
             <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Tile 3
-              </Typography>
-              <Typography>Some placeholder content.</Typography>
+              <LiveSessionCard token={auth?.token} />
             </CardContent>
           </Card>
         </Grid>

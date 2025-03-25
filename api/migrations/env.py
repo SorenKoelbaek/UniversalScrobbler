@@ -3,7 +3,7 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
 from config import settings
-from dependencies.database import _get_engine
+from dependencies.database import get_sync_engine
 # Import your SQLAlchemy models
 from models import sqlmodels
 
@@ -24,7 +24,7 @@ def run_migrations(local: bool) -> None:
 	Args:
 	    local (bool): Specifies whether it should return a local database.
 	"""
-	connectable = _get_engine(local)
+	connectable = get_sync_engine(local)
 
 	with connectable.connect() as connection:
 		context.configure(
