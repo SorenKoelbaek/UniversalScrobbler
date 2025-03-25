@@ -104,9 +104,8 @@ class SpotifyService:
 
     async def gather_user_playback_history(self, user_uuid: str, db: AsyncSession, limit: int = 50):
         playback = await self.get_current_playback(user_uuid, db)
-        if not isinstance(playback, dict):
+        if not isinstance(playback, dict)  or "item" not in playback:
             return
-
         try:
             track_info = playback["item"]
             progress_ms = playback.get("progress_ms", 0)
