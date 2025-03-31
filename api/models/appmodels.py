@@ -174,11 +174,17 @@ class CollectionBase(BaseModel):
 
 
 class CollectionSimple(CollectionBase):
-    album_releases: list[AlbumReleaseFlat]
+    albums: List[AlbumBase]
+    album_releases: List[AlbumReleaseSimple]
 
     class Config:
         from_attributes=True
 
+class CollectionSimpleRead(CollectionSimple):
+    album_releases: list[AlbumReleaseFlat]
+
+    class Config:
+        from_attributes = True
 
 # CollectionRead represents a user's collection and all albums/releases in it
 class CollectionRead(CollectionBase):

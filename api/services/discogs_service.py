@@ -195,19 +195,13 @@ class DiscogsService:
 
         return await collection_service.get_collection_simple(collection.collection_uuid)
 
-    async def get_or_create_track(self, track_data, album_release, db: AsyncSession):
+    async def get_or_create_track(self, track_data, album_release, token:str, secret:str, db: AsyncSession):
         # 1. Ensure track exists in the database based on both track_name and artist
         track_name = track_data.get("title")
         extra_artists = track_data.get("extra_artists", [])
-
         # Collect artist UUIDs from the main artists on the album_release and extra artists
         artist_uuids = [artist.artist_uuid for artist in album_release.artists]
-        if extra_artists:
-            for extra_artist in extra_artists:
-                result = await db.execute(Artist.query.where(Artist.discogs_artist_id == extra_artist['id']))
-                artist = result.scalars().first()
-                artist_uuids.append(artist.artist_uuid)
-
+        logger.info("checking if bridge already exists")
         # Query the database to check if the track already exists for this artist
         result = await db.execute(
             select(Track)
@@ -217,18 +211,19 @@ class DiscogsService:
                 TrackArtistBridge.artist_uuid.in_(artist_uuids)  # Corrected to use .in_() for "IN" operator
             )
         )
-        track = result.scalars().first()
+        track = result.scalar_one_or_none()
         if track:
             return track
         else:
-            # If track doesn't exist, create a new one
+            logger.info("Track doesn't exists")
             track = Track(
                 name=track_name,
             )
             db.add(track)
             await db.flush()
-
+            logger.info("Track created")
             # Link the track to the artists (via TrackArtistBridge)
+            logger.info("linking track")
             for artist_uuid in artist_uuids:
                 track_artist_link = TrackArtistBridge(track_uuid=track.track_uuid, artist_uuid=artist_uuid)
                 db.add(track_artist_link)
@@ -293,32 +288,48 @@ class DiscogsService:
                 ))
 
         await db.flush()
-    async def create_master_album(self, master_data: dict, token: str, secret: str, db: AsyncSession):
-        result = await db.execute(
-            select(Album).where(Album.discogs_master_id == master_data.get("discogs_master_id")).options(selectinload(Album.artists))
-        )
-        album = result.scalar_one_or_none()
-        if album:
-            return album
-        new_album = Album(
-            discogs_master_id=master_data.get("discogs_master_id"),
-            title=master_data.get("title"),
-            country=master_data.get("country"),
-            styles=", ".join(master_data.get("styles", [])) if master_data.get("styles") else None,
-            release_date=parse_date(master_data.get("year")),
-            discogs_main_release_id=master_data.get("main_release"),
-            quality=master_data.get("quality"),
-        )
-        db.add(new_album)
-        await db.flush()
 
-        # Refetch to attach artists eagerly
-        result = await db.execute(
-            select(Album).where(Album.album_uuid == new_album.album_uuid).options(selectinload(Album.artists))
-        )
-        new_album = result.scalar_one()
-        await self.link_artists_to_album(new_album, master_data.get("artists", []), token, secret, db)
-        return new_album
+    async def create_master_album(self, master_data: dict, token: str, secret: str, db: AsyncSession):
+        try:
+            # Check if the album already exists (without loading artists)
+            result = await db.execute(
+                select(Album).where(Album.discogs_master_id == master_data.get("discogs_master_id"))
+            )
+            album = result.scalar_one_or_none()
+
+            # If the album exists, return it with the artists eagerly loaded
+            if album:
+                # Eagerly load the artists for the existing album
+                await db.execute(
+                    select(Album).where(Album.album_uuid == album.album_uuid).options(selectinload(Album.artists)))
+                return album
+
+            # Create a new album if it doesn't exist
+            new_album = Album(
+                discogs_master_id=master_data.get("discogs_master_id"),
+                title=master_data.get("title"),
+                country=master_data.get("country"),
+                styles=", ".join(master_data.get("styles", [])) if master_data.get("styles") else None,
+                release_date=parse_date(master_data.get("year")),
+                discogs_main_release_id=master_data.get("main_release"),
+                quality=master_data.get("quality"),
+            )
+
+            # Add the new album to the session
+            db.add(new_album)
+            await db.flush()  # Flush to the database to get the UUID assigned
+
+            # Eagerly load the artists after the flush
+            await db.execute(
+                select(Album).where(Album.album_uuid == new_album.album_uuid).options(selectinload(Album.artists)))
+
+            # The artists will now be available
+            await self.link_artists_to_album(new_album, master_data.get("artists", []), token, secret, db)
+
+            return new_album
+        except Exception as e:
+            logger.error(f"Failed to create or fetch album: {e}")
+            raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
     async def create_master_album_from_release(self, release_data, token: str, secret: str, db: AsyncSession):
         album = Album(
@@ -344,16 +355,28 @@ class DiscogsService:
             self, release_data: dict, token: str, secret: str, db: AsyncSession
     ) -> Album:
         master_id = release_data.get("master_id")
-        result = await db.execute(
-            select(Album).where(Album.discogs_master_id == master_id).options(selectinload(Album.artists)))
-        album = result.scalars().first()
-        if album:
-            return album
+
         if master_id:
+            # If there's a master_id, try to find the album from the master ID
+            result = await db.execute(
+                select(Album).where(Album.discogs_master_id == master_id).options(selectinload(Album.artists))
+            )
+            album = result.scalar_one_or_none()
+
+            if album:
+                return album  # If found, return it
+
+            # If not found, fetch the master data from the API
             master_data = self.api.get_master(master_id, token, secret)
-            if master_data:
-                album = await self.create_master_album(master_data,token, secret, db)
+            if not master_data:
+                raise ValueError(f"Master data not found for master_id: {master_id}")
+
+            # Create the album from the master data if available
+            album = await self.create_master_album(master_data, token, secret, db)
+
         else:
+            # If no master_id, create the album directly from the release data
+            logger.warning(f"No master_id found in release data: {release_data['discogs_release_id']}")
             album = await self.create_master_album_from_release(release_data, token, secret, db)
 
         return album
@@ -423,6 +446,8 @@ class DiscogsService:
                     track_data,  # Pass the track data
                     album,  # The album to associate with
                     album_release,  # The album release to associate with
+                    token,
+                    secret,
                     db,  # The database session
                 )
 
@@ -432,33 +457,59 @@ class DiscogsService:
         return album, album_release
 
     async def add_track_to_db(self,
-            track_data: dict,
-            album: Album,
-            album_release: AlbumRelease,
-            db: AsyncSession
-    ):
-        result = await db.execute(
-            select(Album).where(Album.album_uuid == album.album_uuid).options(selectinload(Album.artists))
-        )
-        album = result.scalar_one()
+                              track_data: dict,
+                              album: Album,
+                              album_release: AlbumRelease,
+                              token:str,
+                              secret: str,
+                              db: AsyncSession
+                              ):
+
+        # No need to query for album and album_release again if they're passed into the function
+        if not album or not album_release:
+            raise HTTPException(status_code=404, detail="Album or AlbumRelease not found")
+
+        album_result = await db.execute(
+            select(Album).where(Album.album_uuid == album.album_uuid).options(selectinload(Album.artists)))
+        album = album_result.scalar_one_or_none()
+
+
         release_result = await db.execute(
-            select(AlbumRelease).where(AlbumRelease.album_release_uuid == album_release.album_release_uuid).options(selectinload(AlbumRelease.artists))
-        )
-        album_release = release_result.scalar_one()
-        # find artist from main and artist from track
-        track = await self.get_or_create_track(track_data, album_release, db)
-        track_version = await self.get_or_create_track_version(track, track_data, album_release, db)
-        linked_result = await db.execute(
-            select(TrackAlbumBridge).where(
-                TrackAlbumBridge.track_uuid == track.track_uuid,
-                TrackAlbumBridge.album_uuid == album.album_uuid )
-        )
-        islinked = linked_result.scalar_one_or_none()
-        if not islinked:
-            track_album_link = TrackAlbumBridge(track_uuid=track.track_uuid, album_uuid=album.album_uuid)
-            db.add(track_album_link)
-            await db.flush()
-        return track
+            select(AlbumRelease).where(AlbumRelease.album_release_uuid == album_release.album_release_uuid).options(
+                selectinload(AlbumRelease.artists)))
+        album_release = release_result.scalar_one_or_none()
+
+        # Create or get the track
+        try:
+            track = await self.get_or_create_track(track_data, album_release,token,secret, db)
+        except Exception as e:
+            logger.debug(f"couldn't create track {track_data['title']} by {track_data['artists']}: {e}")
+
+        # Create or get the track version
+        try:
+            track_version = await self.get_or_create_track_version(track, track_data, album_release, db)
+        except Exception as e:
+            logger.debug(f"couldn't create track-version {track_data['title']} by {track_data['artists']}: {e}")
+
+        try:
+            # Check if the track is already linked to the album
+            linked_result = await db.execute(
+                select(TrackAlbumBridge).where(
+                    TrackAlbumBridge.track_uuid == track.track_uuid,
+                    TrackAlbumBridge.album_uuid == album.album_uuid
+                )
+            )
+            islinked = linked_result.scalar_one_or_none()
+
+            # If not linked, add the track to the album
+            if not islinked:
+                track_album_link = TrackAlbumBridge(track_uuid=track.track_uuid, album_uuid=album.album_uuid)
+                db.add(track_album_link)
+                await db.flush()
+
+            return track
+        except Exception as e:
+            logger.error("couldn't link track to album")
 
     async def get_or_create_album_from_release(self, release_id: int, token: str, secret: str, db: AsyncSession):
         result = await db.execute(select(AlbumRelease).where(AlbumRelease.discogs_release_id == release_id))
@@ -541,7 +592,9 @@ class DiscogsService:
                     await self.add_track_to_db(
                         track_data,  # Pass the track data
                         album,  # The album to associate with
-                        album_release,  # The album release to associate with
+                        album_release,  # The album release to associate with¨
+                        token,
+                        secret,
                         db,  # The database session
                     )
             except Exception as e:
