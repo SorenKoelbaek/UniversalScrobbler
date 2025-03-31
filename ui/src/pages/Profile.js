@@ -62,7 +62,7 @@ const Profile = () => {
     setLoading(true);
     setSuccess(false);
     try {
-      await apiClient.get("/discogs/refresh");
+      await apiClient.post("/discogs/refresh");
       setSuccess(true);
     } catch (error) {
       console.error("Failed to trigger Discogs refresh:", error);
