@@ -5,14 +5,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 
 import asyncio
-from scripts.gather_playback import gather_all_playbacks
 from config import settings
 import logging
 
 
 logger = logging.getLogger(__name__)
 show_docs = settings.LOCAL == "true"
-
 
 
 app = FastAPI(
