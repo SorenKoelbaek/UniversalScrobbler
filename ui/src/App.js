@@ -7,11 +7,16 @@ import UserMenu from "./components/UserMenu";
 import Profile from "./pages/Profile";
 import Dashboard from "./pages/Dashboard";
 import Landing from "./pages/Landing";
+import Collection from "./pages/Collection";
 import SpotifyCallback from "./pages/SpotifyCallback";
 import DiscogsCallback from "./pages/DiscogsCallback";
 import ProtectedRoute from "./auth/ProtectedRoute"; // ⬅️ Ensure this is already imported
 
-
+const navLinks = [
+  { label: "Collection", path: "/collection" },
+  { label: "Listening History", path: "/listening-history" },
+  { label: "Discover", path: "/discover" },
+];
 
 const App = () => {
   const { auth, logout, user, loading } = useContext(AuthContext);
@@ -40,6 +45,20 @@ const App = () => {
             Universal Scrobbler
           </Link>
         </Typography>
+            {auth?.user && (
+              <Box sx={{ display: "flex" }}>
+                {navLinks.map((link) => (
+                  <Button
+                    key={link.label}
+                    color="inherit"
+                    component={Link}
+                    to={link.path}
+                  >
+                    {link.label}
+                  </Button>
+                ))}
+              </Box>
+            )}
           {auth?.user ? (
             <UserMenu />
           ) : (
@@ -54,7 +73,8 @@ const App = () => {
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
           <Route path="/spotify/callback" element={<SpotifyCallback />} />
-            <Route path="/discogs/callback" element={<DiscogsCallback />} />
+          <Route path="/discogs/callback" element={<DiscogsCallback />} />
+          <Route path="/collection" element={<Collection />} />
           <Route
             path="/dashboard"
             element={

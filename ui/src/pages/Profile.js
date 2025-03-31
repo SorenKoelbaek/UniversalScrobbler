@@ -58,6 +58,19 @@ const Profile = () => {
       console.error("Error during Discogs login redirect:", err);
     }
   };
+  const handleRefreshDiscogs = async () => {
+    setLoading(true);
+    setSuccess(false);
+    try {
+      await apiClient.get("/discogs/refresh");
+      setSuccess(true);
+    } catch (error) {
+      console.error("Failed to trigger Discogs refresh:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+  const [success, setSuccess] = useState(false);
 
   return (
     <Card sx={{ maxWidth: 500, margin: "2rem auto" }}>
@@ -105,6 +118,20 @@ const Profile = () => {
             >
               {loading ? <CircularProgress size={20} /> : "Authorize Discogs"}
             </Button>)}
+            <Button
+                variant="contained"
+                color="primary"
+                onClick={handleRefreshDiscogs}
+                disabled={loading}
+                sx={{ mt: 2 }}
+              >
+                {loading ? <CircularProgress size={24} /> : "Refresh Discogs Collection"}
+              </Button>
+              {success && (
+                <Typography variant="body2" color="success.main" sx={{ mt: 1 }}>
+                  Refresh triggered!
+                </Typography>
+              )}
           </Grid>
         </Grid>
       </CardContent>

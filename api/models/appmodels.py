@@ -1,8 +1,8 @@
 from typing import Optional, List, Union
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, field_serializer
+from pydantic import BaseModel, EmailStr, field_serializer, field_validator, model_validator, Field, AliasPath
 from datetime import datetime, timezone
-from pydantic.alias_generators import to_camel
+
 
 class PlaybackHistoryBase(BaseModel):
     spotify_track_id: Optional[str]
@@ -122,6 +122,11 @@ class ArtistRead(ArtistBase):
     class Config:
         from_attributes=True
 
+class AlbumSimple(AlbumBase):
+    artists: List[ArtistBase]  # List of artists associated with this master album
+
+    class Config:
+        from_attributes=True
 
 # AlbumRead reflects the "master album" which may have many releases
 class AlbumRead(AlbumBase):
@@ -131,19 +136,23 @@ class AlbumRead(AlbumBase):
     class Config:
         from_attributes=True
 
+class AlbumReleaseFlat(BaseModel):
+    album_release_uuid: UUID
+    album_title: str = Field(..., alias=AliasPath("album", "title"))
+    release_date: Optional[datetime] = Field(..., alias=AliasPath("album", "release_date"))
+    image_url: str
+    image_thumbnail_url: str
+    class Config:
+        from_attributes=True
+    artists: List[ArtistBase]
+    class Config:
+        from_attributes = True
 
 # AlbumReleaseRead reflects a specific release of an album
 class AlbumReleaseRead(AlbumReleaseBase):
     album: AlbumBase  # The master album for this release
     artists: List[ArtistBase]  # Artists for this specific release
     tracks: List[TrackBase]  # Tracks for this specific release
-
-    class Config:
-        from_attributes=True
-
-class CollectionBase(BaseModel):
-    collection_uuid: UUID
-    collection_name: str
 
     class Config:
         from_attributes=True
@@ -155,8 +164,17 @@ class AlbumReleaseSimple(BaseModel):
     class Config:
         from_attributes=True
 
+
+class CollectionBase(BaseModel):
+    collection_uuid: UUID
+    collection_name: str
+
+    class Config:
+        from_attributes=True
+
+
 class CollectionSimple(CollectionBase):
-    album_releases: list[AlbumReleaseSimple]
+    album_releases: list[AlbumReleaseFlat]
 
     class Config:
         from_attributes=True
@@ -164,7 +182,7 @@ class CollectionSimple(CollectionBase):
 
 # CollectionRead represents a user's collection and all albums/releases in it
 class CollectionRead(CollectionBase):
-    albums: List[AlbumRead]  # List of albums (master) in the collection
+    albums: List[AlbumSimple]  # List of albums (master) in the collection
     album_releases: List[AlbumReleaseBase]  # List of album releases in the collection
     created_at: Optional[datetime]  # Track when collection was created
 
