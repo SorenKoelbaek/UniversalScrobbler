@@ -428,7 +428,7 @@ class DiscogsService:
 
 
         except Exception as e:
-            logger.error(f"Failed to create album release {release_data["title"]} by {release_data["artists"]}: {e}")
+            logger.error(f"Failed to create album release {release_data['title']} by {release_data['artists']}: {e}")
         return album, album_release
 
     async def add_track_to_db(self,
