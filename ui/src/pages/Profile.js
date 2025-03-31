@@ -70,6 +70,18 @@ const Profile = () => {
       setLoading(false);
     }
   };
+   const handleDeleteAll = async () => {
+    setLoading(true);
+    setSuccess(false);
+    try {
+      await apiClient.delete("/database/delete_all");
+      setSuccess(true);
+    } catch (error) {
+      console.error("Failed to trigger delete_all refresh:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
   const [success, setSuccess] = useState(false);
 
   return (
@@ -126,6 +138,15 @@ const Profile = () => {
                 sx={{ mt: 2 }}
               >
                 {loading ? <CircularProgress size={24} /> : "Refresh Discogs Collection"}
+              </Button>
+            <Button
+                variant="contained"
+                color="primary"
+                onClick={handleDeleteAll}
+                disabled={loading}
+                sx={{ mt: 2 }}
+              >
+                {loading ? <CircularProgress size={24} /> : "Empty the storage"}
               </Button>
               {success && (
                 <Typography variant="body2" color="success.main" sx={{ mt: 1 }}>

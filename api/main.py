@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routers import (auth_router, spotify, consumption, discogs, music, collection)
+from routers import (auth_router, database, spotify, consumption, discogs, music, collection)
 from routers import event
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -38,8 +38,9 @@ app.include_router(collection.router)
 app.include_router(consumption.router)
 app.include_router(music.router)
 
-app.include_router(event.router)
+#app.include_router(event.router)
 app.include_router(auth_router.router)
+app.include_router(database.router)
 
 logging.info(f"Starting with environment = {settings.current_env}")
 

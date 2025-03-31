@@ -352,7 +352,7 @@ class DiscogsService:
         if master_id:
             master_data = self.api.get_master(master_id, token, secret)
             if master_data:
-                album = await self.create_album(master_data,token, secret, db)
+                album = await self.create_master_album(master_data,token, secret, db)
         else:
             album = await self.create_master_album_from_release(release_data, token, secret, db)
 
