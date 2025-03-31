@@ -30,8 +30,9 @@ class CollectionService:
     async def get_primary_collection(self, user_uuid: UUID) -> CollectionSimpleRead:
         result = await self.db.execute(select(Collection).where(Collection.user_uuid == user_uuid)
         .options(
-            selectinload(Collection.album_releases).selectinload(AlbumRelease.artists),
-            selectinload(Collection.album_releases).selectinload(AlbumRelease.album)
+            selectinload(Collection.albums).selectinload(Album.artists),  # Eager load albums and their artists
+            selectinload(Collection.albums).selectinload(Album.tracks),  # Eager load albums and their tracks
+            selectinload(Collection.album_releases).selectinload(AlbumRelease.artists)
             # Eager load album releases and their artists
         ))
         collection = result.scalar_one_or_none()
