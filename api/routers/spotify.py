@@ -26,7 +26,7 @@ async def authorize_spotify(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_async_session)
 ):
-    return spotify_service.add_token_for_user(payload.code, user.user_uuid, db)
+    return await spotify_service.add_token_for_user(payload.code, user.user_uuid, db)
 
 
 

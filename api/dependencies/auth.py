@@ -68,7 +68,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     except (JWTError, ValueError):
         raise credentials_exception
 
-    result = await db.exec(select(User).where(User.user_uuid == user_uuid).options(selectinload(User.spotify_token)))
+    result = await db.exec(select(User).where(User.user_uuid == user_uuid).options(selectinload(User.spotify_token)).options(selectinload(User.discogs_token)))
     user = result.first()
     if user is None:
         raise credentials_exception

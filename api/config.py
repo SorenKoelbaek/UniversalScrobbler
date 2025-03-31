@@ -14,7 +14,7 @@ if settings.LOCAL == 'true':
 
 
 def setup_logging():
-    log_level = logging.INFO  # or DEBUG if you're actively developing
+    log_level = logging.INFO if settings.LOCAL == 'true' else logging.WARNING
 
     formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(message)s",
@@ -24,47 +24,32 @@ def setup_logging():
     handler = logging.StreamHandler()
     handler.setFormatter(formatter)
 
+    # 🌍 Global root logger
     root = logging.getLogger()
     root.setLevel(log_level)
     root.handlers = [handler]
 
-    # 🛠️ Attach your format to Uvicorn's loggers too
-    uvicorn_access = logging.getLogger("uvicorn.access")
-    uvicorn_access.setLevel(log_level)
-    uvicorn_access.handlers = [handler]
-    uvicorn_access.propagate = False
+    # 🎯 Silence specific noisy loggers
+    noisy_loggers = [
+        "sqlalchemy",              # Base
+        "sqlalchemy.engine",       # Queries
+        "sqlalchemy.pool",         # Connections
+        "sqlalchemy.dialects",     # Driver-level stuff
+        "sqlalchemy.orm",          # ORM internals
+        "alembic",                 # Migration logs
+    ]
 
-    uvicorn_error = logging.getLogger("uvicorn.error")
-    uvicorn_error.setLevel(logging.ERROR)
-    uvicorn_error.handlers = [handler]
-    uvicorn_error.propagate = False
+    for name in noisy_loggers:
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.WARNING)
+        logger.handlers = [handler]
+        logger.propagate = False
 
-    uvicorn_general = logging.getLogger("uvicorn")
-    uvicorn_general.setLevel(log_level)
-    uvicorn_general.handlers = [handler]
-    uvicorn_general.propagate = False
-
-    # 🧹 Silence noisy SQLAlchemy internals
-    sqlalchemy_engine = logging.getLogger("sqlalchemy.engine")
-    sqlalchemy_engine.setLevel(logging.WARNING)
-    sqlalchemy_engine.handlers = [handler]
-    sqlalchemy_engine.propagate = False
-
-    sqlalchemy_pool = logging.getLogger("sqlalchemy.pool")
-    sqlalchemy_pool.setLevel(logging.WARNING)
-    sqlalchemy_pool.handlers = [handler]
-    sqlalchemy_pool.propagate = False
-
-    # Optional: FastAPI internals
-    fastapi_logger = logging.getLogger("fastapi")
-    fastapi_logger.setLevel(logging.WARNING)
-    fastapi_logger.handlers = [handler]
-    fastapi_logger.propagate = False
-
-    # Optional: Starlette internals
-    starlette_logger = logging.getLogger("starlette")
-    starlette_logger.setLevel(logging.WARNING)
-    starlette_logger.handlers = [handler]
-    starlette_logger.propagate = False
+    # ⚙️ FastAPI / Starlette / Uvicorn loggers
+    for name in ["uvicorn", "uvicorn.access", "uvicorn.error", "fastapi", "starlette"]:
+        logger = logging.getLogger(name)
+        logger.setLevel(log_level)
+        logger.handlers = [handler]
+        logger.propagate = False
 
 setup_logging()

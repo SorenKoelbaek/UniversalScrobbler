@@ -52,7 +52,7 @@ def get_sync_engine(local: bool) -> Engine:
 	return engine
 
 # Create async engine and sessionmaker
-engine: AsyncEngine = create_async_engine(_local_postgres_connect_string, echo=True)
+engine: AsyncEngine = create_async_engine(_local_postgres_connect_string, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 # Async session dependency for FastAPI

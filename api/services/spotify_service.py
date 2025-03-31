@@ -6,12 +6,13 @@ from datetime import datetime, timedelta
 from fastapi import HTTPException
 from models.sqlmodels import SpotifyToken, PlaybackHistory
 from config import settings
-from services.connection_manager import manager
 from models.appmodels import CurrentlyPlaying
 import logging
 from typing import Optional
 import json
 logger = logging.getLogger(__name__)
+
+SPOTIFY_CACHE_PATH = ".cache-universal"
 
 
 class SpotifyService:
@@ -24,8 +25,9 @@ class SpotifyService:
                 client_id=settings.SPOTIFY_CLIENT_ID,
                 client_secret=settings.SPOTIFY_CLIENT_SECRET,
                 redirect_uri=settings.SPOTIFY_REDIRECT_URI,
-                scope="user-read-playback-state user-read-currently-playing user-read-recently-played",
+                    scope="user-read-playback-state user-read-currently-playing user-read-recently-played streaming app-remote-control",
                 show_dialog=False,
+                cache_path=SPOTIFY_CACHE_PATH,
             )
         return cls._instance
 
@@ -56,8 +58,8 @@ class SpotifyService:
         return self.oauth.get_authorize_url()
 
     async def get_token_for_user(self, user_uuid: str, db: AsyncSession) -> str:
-        result = await db.exec(select(SpotifyToken).where(SpotifyToken.user_uuid == user_uuid))
-        token = result.first()
+        result = await db.execute(select(SpotifyToken).where(SpotifyToken.user_uuid == user_uuid))
+        token = result.scalars().first()
 
         if not token:
             raise HTTPException(status_code=404, detail="Spotify token not found for user.")
@@ -208,26 +210,6 @@ class SpotifyService:
                 db.add(scrobble)
 
             await db.commit()
-
-            if manager.has_connections(user_uuid):
-                now_playing = CurrentlyPlaying(
-                    spotify_track_id=track_id,
-                    track_name=track_name,
-                    artist_name=artist_name,
-                    album_name=album_name,
-                    played_at=played_at,
-                    source="spotify",
-                    device_name=device_name,
-                    duration_ms=duration_ms,
-                    progress_ms=progress_ms,
-                    is_still_playing=still_playing,
-                    full_play=False,
-                    discogs_release_id=None,
-                )
-                await manager.send_to_user(user_uuid, {
-                    "type": "current_play",
-                    "data": now_playing.model_dump(mode="json")
-                })
 
             logger.info(f"✅ Tracked: {track_name} by {artist_name} for user {user_uuid}")
 

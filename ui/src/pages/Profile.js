@@ -15,6 +15,7 @@ import { useSnackbar } from "../contexts/SnackbarContext";
 const Profile = () => {
   const { user } = useContext(AuthContext);
   const [loading, setLoading] = useState(false);
+  const apiUrl = process.env.REACT_APP_API_URL;
 
   const formatDateTime = (dateStr) => {
     const d = new Date(dateStr);
@@ -42,6 +43,21 @@ const Profile = () => {
       setLoading(false);
     }
   };
+  const handleSpotifyReauthorize = () => {
+  window.location.href = `${apiUrl}/spotify/login`;
+};
+  const handleDiscogsReauthorize = async () => {
+    try {
+      const res = await apiClient.get("/discogs/login"); // returns { url: "https://..." }
+      if (res.data.url) {
+        window.location.href = res.data.url;
+      } else {
+        console.error("No redirect URL received from backend");
+      }
+    } catch (err) {
+      console.error("Error during Discogs login redirect:", err);
+    }
+  };
 
   return (
     <Card sx={{ maxWidth: 500, margin: "2rem auto" }}>
@@ -61,6 +77,11 @@ const Profile = () => {
                 Spotify token expires at: {formatDateTime(user.spotify_token.expires_at)}
               </Typography>
             )}
+            {user.discogs_token && (
+              <Typography variant="body2" color="text.secondary">
+                Discogs access token: {user.discogs_token.access_token}
+              </Typography>
+            )}
           </Stack>
         ) : (
           <Typography>No user data available.</Typography>
@@ -68,14 +89,22 @@ const Profile = () => {
 
         <Grid container spacing={2}>
           <Grid item>
-            <Button
+            {!user.discogs_token && (<Button
               variant="outlined"
               color="secondary"
-              onClick={handleManualGather}
+              onClick={handleSpotifyReauthorize}
               disabled={loading}
             >
-              {loading ? <CircularProgress size={20} /> : "Manually gather playbacks"}
-            </Button>
+              {loading ? <CircularProgress size={20} /> : "Authorize Spotify"}
+            </Button>)}
+            {!user.discogs_token && (<Button
+              variant="outlined"
+              color="secondary"
+              onClick={handleDiscogsReauthorize}
+              disabled={loading}
+            >
+              {loading ? <CircularProgress size={20} /> : "Authorize Discogs"}
+            </Button>)}
           </Grid>
         </Grid>
       </CardContent>

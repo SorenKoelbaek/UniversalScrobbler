@@ -8,6 +8,7 @@ import Profile from "./pages/Profile";
 import Dashboard from "./pages/Dashboard";
 import Landing from "./pages/Landing";
 import SpotifyCallback from "./pages/SpotifyCallback";
+import DiscogsCallback from "./pages/DiscogsCallback";
 import ProtectedRoute from "./auth/ProtectedRoute"; // ⬅️ Ensure this is already imported
 
 
@@ -53,6 +54,7 @@ const App = () => {
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
           <Route path="/spotify/callback" element={<SpotifyCallback />} />
+            <Route path="/discogs/callback" element={<DiscogsCallback />} />
           <Route
             path="/dashboard"
             element={

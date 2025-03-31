@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routers import (auth_router, spotify, consumption)
+from routers import (auth_router, spotify, consumption, discogs, music, collection)
 from routers import event
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -35,24 +35,13 @@ app.add_middleware(
 )
 
 app.include_router(spotify.router)
+app.include_router(discogs.router)
+app.include_router(collection.router)
 app.include_router(consumption.router)
+app.include_router(music.router)
 
 app.include_router(event.router)
 app.include_router(auth_router.router)
 
 logging.info(f"Starting with environment = {settings.current_env}")
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(run_gatherer())
-
-async def run_gatherer():
-    while True:
-        try:
-            logger.info("[GATHERER] Starting gather task...")
-            await gather_all_playbacks()  # ✅ just await the coroutine directly
-            logger.info("[GATHERER] Playback history gathered successfully.")
-        except Exception as e:
-            logger.error(f"[GATHERER] Error during gathering: {e}")
-
-        await asyncio.sleep(5)
