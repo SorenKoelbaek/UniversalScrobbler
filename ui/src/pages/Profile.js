@@ -158,7 +158,7 @@ const Profile = () => {
                 disabled={loading}
                 sx={{ mt: 2 }}
               >
-                {loading ? <CircularProgress size={24} /> : "Empty the storage"}
+                {loading ? <CircularProgress size={24} /> : "Rebuild collection"}
               </Button>
              <Button
                 variant="contained"
