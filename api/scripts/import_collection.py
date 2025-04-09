@@ -105,10 +105,10 @@ class ImportCollection:
         with tarfile.open(f"scripts/{folder_name}.tar.xz", "r:xz") as tar:
             for member in tar:
                 if member.name.endswith(f"mbdump/{folder_name}"):
+                    start = datetime.now()
                     f = tar.extractfile(member)
                     if f:
                         for i, line in enumerate(f):
-                            start = datetime.now()
                             data = json.loads(line)
                             if folder_name == "artist":
                                 artist = await self.import_artist_from_musicbrainz(data)
