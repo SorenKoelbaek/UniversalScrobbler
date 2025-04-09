@@ -120,7 +120,7 @@ class ImportCollection:
                     if not f:
                         raise RuntimeError(f"Could not extract member {member.name} from archive")
 
-                    for i, line in enumerate(f):
+                    for i, line in enumerate(f, start=1):
                         data = json.loads(line)
                         if folder_name == "artist":
                             await self.import_artist_from_musicbrainz(data)
@@ -133,6 +133,11 @@ class ImportCollection:
 
                         await self.db.commit()
 
+                        # ✅ Log every 1000 records
+                        if i % 1000 == 0:
+                            elapsed = (datetime.now() - start).total_seconds()
+                            print(f"[{folder_name}] Processed {i} records in {elapsed:.2f} seconds")
+
                     break
             else:
                 raise ValueError(f"No matching mbdump/{folder_name} entry found in tar")
@@ -140,7 +145,7 @@ class ImportCollection:
 if __name__ == "__main__":
     import argparse
     import asyncio
-    from dependencies.database import get_engine, get_sessionmaker
+    from dependencies.database import get_async_session
 
     async def main():
         parser = argparse.ArgumentParser(description="Import MusicBrainz data")
@@ -151,10 +156,8 @@ if __name__ == "__main__":
         )
         args = parser.parse_args()
 
-        engine = get_engine()
-        async_sessionmaker = get_sessionmaker(engine)
-
-        async with async_sessionmaker() as session:
+        # ✅ Use your real session dependency properly
+        async for session in get_async_session():
             importer = ImportCollection(session)
             await importer.import_data(args.folder)
             print(f"✅ Imported {args.folder} successfully.")
