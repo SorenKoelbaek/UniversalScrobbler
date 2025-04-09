@@ -129,3 +129,27 @@ class ImportCollection:
                     break
             else:
                 raise ValueError(f"No matching mbdump/{folder_name} entry found in tar")
+
+if __name__ == "__main__":
+    import argparse
+    import asyncio
+    from dependencies.database import get_engine, get_sessionmaker
+
+    async def main():
+        parser = argparse.ArgumentParser(description="Import MusicBrainz data")
+        parser.add_argument(
+            "folder",
+            choices=["artist", "release-group", "release"],
+            help="Which MusicBrainz entity to import",
+        )
+        args = parser.parse_args()
+
+        engine = get_engine()
+        async_sessionmaker = get_sessionmaker(engine)
+
+        async with async_sessionmaker() as session:
+            importer = ImportCollection(session)
+            await importer.import_data(args.folder)
+            print(f"✅ Imported {args.folder} successfully.")
+
+    asyncio.run(main())
