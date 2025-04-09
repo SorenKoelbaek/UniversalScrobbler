@@ -11,6 +11,7 @@ from config import settings
 import logging
 logger = logging.getLogger(__name__)
 from scripts.import_collection import ImportCollection
+import asyncio
 router = APIRouter(
     prefix="/database",
     tags=["database"]
@@ -18,14 +19,21 @@ router = APIRouter(
 
 
 @router.put("/import_musicbrainz")
-async def import_database(db: AsyncSession = Depends(get_async_session)):
-    import_collection = ImportCollection(db)
-    # woop = await import_collection.import_data("artist")
-    woop = await import_collection.import_data("release-group")
-    woop = await import_collection.import_data("release")
+async def import_database_background(db: AsyncSession = Depends(get_async_session)):
+    async def run_import_sequence():
+        try:
+            import_collection = ImportCollection(db)
+            await import_collection.import_data("artist")
+            await import_collection.import_data("release-group")
+            await import_collection.import_data("release")
+            logger.info("Import completed successfully.")
+        except Exception as e:
+            logger.exception("Error during background import: %s", e)
 
-    return {"Success"}
+    # Launch the import task in the background
+    asyncio.create_task(run_import_sequence())
 
+    return {"success": True, "message": "Import started in background"}
 
 
 @router.delete("/delete_all")
