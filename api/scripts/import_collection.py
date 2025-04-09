@@ -136,6 +136,7 @@ class ImportCollection:
                         # ✅ Log every 1000 records
                         if i % 1000 == 0:
                             elapsed = (datetime.now() - start).total_seconds()
+                            start = datetime.now()
                             print(f"[{folder_name}] Processed {i} records in {elapsed:.2f} seconds")
 
                     break
