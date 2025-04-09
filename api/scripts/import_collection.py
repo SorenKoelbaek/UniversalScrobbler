@@ -1,8 +1,15 @@
 
 import os
 import sys
+
+# 🔧 Add project root to sys.path for relative imports to work
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 from sqlalchemy.ext.asyncio import AsyncSession
 from dependencies.database import get_async_session
+
 from services.musicbrainz_service import MusicBrainzService
 from dependencies.musicbrainz_api import MusicBrainzAPI
 # Add the parent directory (api folder) to the Python path
