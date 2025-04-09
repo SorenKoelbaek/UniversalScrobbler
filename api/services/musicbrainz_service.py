@@ -7,6 +7,8 @@ from uuid import UUID
 from datetime import datetime, date
 from typing import Optional, Tuple
 import re
+from uuid import uuid4
+from sqlmodel import select
 
 from dependencies.musicbrainz_api import MusicBrainzAPI
 from models.sqlmodels import (
@@ -537,6 +539,163 @@ class MusicBrainzService:
                         count=tag.get("count", 0)
                     ))
 
+        # Create Tracks and Versions
+
+
+    async def create_tracks_and_versions_simple(
+            self,
+            album: Album,
+            album_release: AlbumRelease,
+            media_tracks: list[dict],
+            recordings_data: list[dict],
+            should_take_duration: bool = False
+    ):
+        recordings_by_id = {rec["recording_id"]: rec for rec in recordings_data}
+
+        # Preload album artists
+        album_artists_result = await self.db.execute(
+            select(Artist).join(AlbumArtistBridge).where(AlbumArtistBridge.album_uuid == album.album_uuid)
+        )
+        album_artists = album_artists_result.scalars().all()
+        album_artist_ids = {a.artist_uuid for a in album_artists}
+
+        # Caches to avoid redundant SELECTs
+        existing_tracks = {}
+        existing_versions = {}
+        existing_bridges = set()
+        existing_extra_artists = set()
+        existing_tags = set()
+
+        for track_data in media_tracks:
+            title = track_data["title"]
+            recording_data = track_data["recording"]
+            recording_id = recording_data["id"]
+            length = track_data.get("length")
+            track_number = track_data.get("number")
+
+            # Get enriched recording details
+            recording_details = recordings_by_id.get(recording_id, {})
+
+            # Track: get or create
+            track = existing_tracks.get(title)
+            if not track:
+                result = await self.db.execute(select(Track).where(Track.name == title))
+                track = result.scalar_one_or_none()
+                if not track:
+                    track = Track(track_uuid=uuid4(), name=title, duration=length if length else None)
+                    self.db.add(track)
+                existing_tracks[title] = track
+
+            # TrackAlbumBridge
+            bridge_key = (track.track_uuid, album.album_uuid)
+            if bridge_key not in existing_bridges:
+                result = await self.db.execute(
+                    select(TrackAlbumBridge).where(
+                        TrackAlbumBridge.track_uuid == track.track_uuid,
+                        TrackAlbumBridge.album_uuid == album.album_uuid
+                    )
+                )
+                if not result.scalar_one_or_none():
+                    self.db.add(TrackAlbumBridge(
+                        track_uuid=track.track_uuid,
+                        album_uuid=album.album_uuid,
+                        track_number=track_number
+                    ))
+                existing_bridges.add(bridge_key)
+
+            # TrackVersion: get or create
+            version = existing_versions.get(recording_id)
+            if not version:
+                result = await self.db.execute(
+                    select(TrackVersion).where(TrackVersion.recording_id == recording_id)
+                )
+                version = result.scalar_one_or_none()
+                if not version:
+                    version = TrackVersion(
+                        track_version_uuid=uuid4(),
+                        recording_id=recording_id,
+                        track_uuid=track.track_uuid,
+                        duration=length if length else None,
+                        quality="normal"
+                    )
+                    self.db.add(version)
+                existing_versions[recording_id] = version
+
+            # Version ↔ AlbumRelease
+            bridge_key = (version.track_version_uuid, album_release.album_release_uuid)
+            if bridge_key not in existing_bridges:
+                result = await self.db.execute(
+                    select(TrackVersionAlbumReleaseBridge).where(
+                        TrackVersionAlbumReleaseBridge.track_version_uuid == version.track_version_uuid,
+                        TrackVersionAlbumReleaseBridge.album_release_uuid == album_release.album_release_uuid
+                    )
+                )
+                if not result.scalar_one_or_none():
+                    self.db.add(TrackVersionAlbumReleaseBridge(
+                        track_version_uuid=version.track_version_uuid,
+                        album_release_uuid=album_release.album_release_uuid,
+                        track_number=track_number
+                    ))
+                existing_bridges.add(bridge_key)
+
+            # Track ↔ Artists (Album)
+            for artist_uuid in album_artist_ids:
+                bridge_key = (track.track_uuid, artist_uuid)
+                if bridge_key not in existing_bridges:
+                    result = await self.db.execute(
+                        select(TrackArtistBridge).where(
+                            TrackArtistBridge.track_uuid == track.track_uuid,
+                            TrackArtistBridge.artist_uuid == artist_uuid
+                        )
+                    )
+                    if not result.scalar_one_or_none():
+                        self.db.add(TrackArtistBridge(
+                            track_uuid=track.track_uuid,
+                            artist_uuid=artist_uuid
+                        ))
+                    existing_bridges.add(bridge_key)
+
+            # Extra artists on the version
+            for credit in recording_details.get("artist-credit", []):
+                artist_data = credit.get("artist")
+                if artist_data:
+                    artist = await self.get_or_create_artist_by_name(artist_data["name"])
+                    key = (version.track_version_uuid, artist.artist_uuid)
+                    if key not in existing_extra_artists:
+                        result = await self.db.execute(
+                            select(TrackVersionExtraArtist).where(
+                                TrackVersionExtraArtist.track_version_uuid == version.track_version_uuid,
+                                TrackVersionExtraArtist.artist_uuid == artist.artist_uuid
+                            )
+                        )
+                        if not result.scalar_one_or_none():
+                            self.db.add(TrackVersionExtraArtist(
+                                track_version_uuid=version.track_version_uuid,
+                                artist_uuid=artist.artist_uuid,
+                                role=None
+                            ))
+                        existing_extra_artists.add(key)
+
+            # Tags
+            for tag in recording_details.get("tags", []):
+                tag_obj = await self.get_or_create_tag(tag["name"])
+                key = (version.track_version_uuid, tag_obj.tag_uuid)
+                if key not in existing_tags:
+                    result = await self.db.execute(
+                        select(TrackVersionTagBridge).where(
+                            TrackVersionTagBridge.track_version_uuid == version.track_version_uuid,
+                            TrackVersionTagBridge.tag_uuid == tag_obj.tag_uuid
+                        )
+                    )
+                    if not result.scalar_one_or_none():
+                        self.db.add(TrackVersionTagBridge(
+                            track_version_uuid=version.track_version_uuid,
+                            tag_uuid=tag_obj.tag_uuid,
+                            count=tag.get("count", 0)
+                        ))
+                    existing_tags.add(key)
+
+        await self.db.commit()
 
     # Get or create album from release
     async def get_or_create_album_from_musicbrainz_release(self, musicbrainz_release_id: str, discogs_release_id: int = None, should_take_duration:bool=False) -> Tuple[Album, AlbumRelease]:

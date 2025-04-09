@@ -97,6 +97,24 @@ class ImportCollection:
         album = await self.musicbrainz_service.get_or_create_album_from_release_group_simple(release_group_data)
         discogs_release_id = self.extract_discogs_release_id(release_data)
         album_release = await self.musicbrainz_service.create_album_release_simple(album, release_data, discogs_release_id)
+        media = release_data.get("media", [])
+        media_tracks = []
+        recordings_data = []
+
+        for disc in media:
+            for track in disc.get("tracks", []):
+                media_tracks.append(track)
+                if "recording" in track:
+                    recording = track["recording"].copy()
+                    recording["recording_id"] = recording["id"]
+                    recordings_data.append(recording)
+
+        await self.musicbrainz_service.create_tracks_and_versions_simple(
+            album=album,
+            album_release=album_release,
+            media_tracks=media_tracks,
+            recordings_data=recordings_data
+        )
         # Now just reuse the existing method
         return album_release
 
