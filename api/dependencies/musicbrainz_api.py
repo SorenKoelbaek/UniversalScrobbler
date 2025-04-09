@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class MusicBrainzAPI:
     BASE_URL = "https://musicbrainz.org/ws/2"
     HEADERS = {
-        "User-Agent": f"{settings.get('APPNAME')}/{settings.get("APP_VERSION")} ( soren@sorenkoelbaek.com )"
+        "User-Agent": f"{settings.get('APPNAME')}/{settings.get('APP_VERSION')} ( soren@sorenkoelbaek.com )"
     }
 
     def __init__(self):
