@@ -100,35 +100,32 @@ class ImportCollection:
         name = name.replace("&", "and")  # common synonym
         return name.strip()
 
-
     async def import_data(self, folder_name: str):
-        with tarfile.open(f"scripts/{folder_name}.tar.xz", "r:xz") as tar:
+        path = f"scripts/{folder_name}.tar.xz"
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Expected file {path} not found")
+
+        with tarfile.open(path, "r:xz") as tar:
             for member in tar:
                 if member.name.endswith(f"mbdump/{folder_name}"):
                     start = datetime.now()
                     f = tar.extractfile(member)
-                    if f:
-                        for i, line in enumerate(f):
-                            data = json.loads(line)
-                            if folder_name == "artist":
-                                artist = await self.import_artist_from_musicbrainz(data)
-                                await self.db.commit()
-                                if i % 1000 == 0:
-                                    elapsed = datetime.now() - start
-                                    logger.info(f"Imported 1000 {folder_name} in {elapsed.total_seconds():.2f}")
-                            elif folder_name == "release-group":
-                                album = await self.import_album_from_release_group(data)
-                                await self.db.commit()
-                                if i % 1000 == 0:
-                                    elapsed = datetime.now() - start
-                                    logger.info(f"Imported 1000 {folder_name} in {elapsed.total_seconds():.2f}")
-                            elif folder_name == "release":
-                                album_releasse = await self.create_album_release_from_release_data(data)
-                                await self.db.commit()
-                                if i % 1000 == 0:
-                                    elapsed = datetime.now() - start
-                                    logger.info(f"Imported 1000 {folder_name} in {elapsed.total_seconds():.2f}")
-                            else:
-                                raise NotImplementedError(f"Unknown folder name: {folder_name}")
-                                break
+                    if not f:
+                        raise RuntimeError(f"Could not extract member {member.name} from archive")
+
+                    for i, line in enumerate(f):
+                        data = json.loads(line)
+                        if folder_name == "artist":
+                            await self.import_artist_from_musicbrainz(data)
+                        elif folder_name == "release-group":
+                            await self.import_album_from_release_group(data)
+                        elif folder_name == "release":
+                            await self.create_album_release_from_release_data(data)
+                        else:
+                            raise NotImplementedError(f"Unknown folder name: {folder_name}")
+
+                        await self.db.commit()
+
                     break
+            else:
+                raise ValueError(f"No matching mbdump/{folder_name} entry found in tar")
