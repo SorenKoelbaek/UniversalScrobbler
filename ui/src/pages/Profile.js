@@ -114,7 +114,7 @@ const Profile = () => {
 
         <Grid container spacing={2}>
           <Grid item>
-            {!user.discogs_token && (<Button
+            {!user.spotify_token && (<Button
               variant="outlined"
               color="secondary"
               onClick={handleSpotifyReauthorize}

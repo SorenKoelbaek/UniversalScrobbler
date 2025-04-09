@@ -62,7 +62,6 @@ async def search(
     music_service = MusicService(db)
 
     if track_name is not None:
-        # Call the search_track method from the service
         tracks = await music_service.search_track(user.user_uuid, track_name, artist_name, album_name)
         return MusicSearchResponse(type="track", result=tracks)
     if album_name is not None:

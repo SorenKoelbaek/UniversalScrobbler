@@ -1,25 +1,40 @@
+import uuid
+from mimetypes import knownfiles
+from sqlalchemy.orm import selectinload
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 from typing import List, Optional
 from collections import Counter
-from models.sqlmodels import PlaybackHistory, User
-from models.appmodels import PlaybackHistoryRead, CurrentlyPlaying
+from models.sqlmodels import PlaybackHistory, User, Track, Album
+from models.appmodels import PlaybackHistorySimple, CurrentlyPlaying, PlaybackUpdatePayload, ArtistBase, AlbumBase
+from config import settings
+import logging
+from services.music_service import MusicService
+from services.device_service import DeviceService
+from services.websocket_service import WebSocketService
 
+logger = logging.getLogger(__name__)
 
 class PlaybackHistoryService:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, websocket_service: WebSocketService = None):
         self.db = db
+        self.music_service = MusicService(db)
+        self.device_service = DeviceService(db)
+        self.websocket_service = websocket_service
 
-    async def get_user_playback_history(self, user: User, days: int = 7) -> List[PlaybackHistoryRead]:
-        since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)
+    async def get_user_playback_history(self, user: User, days: int = 7) -> List[PlaybackHistorySimple]:
+        since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
 
         statement = (
             select(PlaybackHistory)
             .where(PlaybackHistory.user_uuid == user.user_uuid)
             .where(PlaybackHistory.played_at >= since)
             .where(PlaybackHistory.full_play)
+            .options(selectinload(PlaybackHistory.track),
+                     selectinload(PlaybackHistory.album).selectinload(Album.artists),
+                     selectinload(PlaybackHistory.device))
             .order_by(PlaybackHistory.played_at.desc())
         )
 
@@ -59,28 +74,25 @@ class PlaybackHistoryService:
     async def get_currently_playing(self, user: User) -> Optional[CurrentlyPlaying]:
         statement = (
             select(PlaybackHistory)
-            .where(PlaybackHistory.user_uuid == user.user_uuid)
+            .where(PlaybackHistory.user_uuid == user.user_uuid, PlaybackHistory.is_still_playing)
+            .options(selectinload(PlaybackHistory.track),
+                     selectinload(PlaybackHistory.album).selectinload(Album.artists),
+                     selectinload(PlaybackHistory.device))
             .order_by(PlaybackHistory.played_at.desc())
             .limit(1)
         )
 
         result = await self.db.exec(statement)
-        record = result.first()
+        playing = result.all()
+        if len(playing)> 0:
+            curr_playing = playing[0]
 
-        if record:
-            return CurrentlyPlaying(
-                spotify_track_id=record.spotify_track_id,
-                track_name=record.track_name,
-                artist_name=record.artist_name,
-                album_name=record.album_name,
-                discogs_release_id=record.discogs_release_id,
-                played_at=record.played_at,
-                source=record.source,
-                device_name=record.device_name,
-                duration_ms=record.duration_ms,
-                progress_ms=record.progress_ms,
-                is_still_playing=record.is_still_playing,
-            )
+            played_at_utc = curr_playing.played_at.replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - played_at_utc).total_seconds() < 1000:
+                return curr_playing
+            else:
+                return None
+
 
     async def get_current_play_message(self, user: User) -> dict:
         current_play: Optional[CurrentlyPlaying] = await self.get_currently_playing(user)
@@ -88,3 +100,127 @@ class PlaybackHistoryService:
             "type": "current_play",
             "data": current_play.model_dump(mode="json") if current_play else None
         }
+
+
+    async def add_listen(self, user: User, play: str):
+        update = PlaybackUpdatePayload.model_validate(play)
+        logger.debug(f"Adding {update}")
+
+        quick_update = CurrentlyPlaying(
+            playback_history_uuid=uuid.uuid4(),
+            spotify_track_id=update.track.spotify_track,
+            played_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            source=update.source,
+            full_play=False,
+            full_update=False,
+            is_still_playing=True,
+            track_uuid=uuid.uuid4(),
+            album_uuid=uuid.uuid4(),
+            track={
+                "name": update.track.song_name,
+                "track_uuid": uuid.uuid4()
+            },
+            album={
+                "title": update.track.album_name,
+                "album_uuid": uuid.uuid4(),
+                "artists": [
+                    ArtistBase(
+                        artist_uuid=uuid.uuid4(),
+                        name=update.track.artist_name
+                    )
+                ],
+                "release_date": None
+            }
+        )
+
+        await self.send_currently_playing(user, quick_update)
+
+        # trying to resolve into objects we know
+        read_tracks = await self.music_service.search_track(
+            user_uuid=user.user_uuid,
+            track_name=update.track.song_name,
+            artist_name=update.track.artist_name,
+            album_name=update.track.album_name)
+
+        device = await self.device_service.get_or_create_device(
+            user=user,
+            device_id=update.device.device_id,
+            device_name=update.device.device_name)
+        if read_tracks and device:
+            read_track = read_tracks[0]
+            current_playing = await self.get_currently_playing(user)
+
+
+            if update.state == "paused" or update.state == "stopped":
+                if current_playing:
+                    current_playing.full_play = False
+                    self.db.add(current_playing)
+                    await self.db.commit()
+                    curr_playing = CurrentlyPlaying.model_validate(current_playing)
+                    curr_playing.is_still_playing = False
+                    curr_playing.full_update = True
+                    await self.send_currently_playing(user, curr_playing)
+
+            if update.state == "playing":
+                if current_playing:
+                    played_at_utc = current_playing.played_at.replace(tzinfo=timezone.utc)
+
+                    if current_playing.track_uuid == read_track.track_uuid:
+                        if (update.timestamp - played_at_utc).total_seconds() < 1000: # TODO: add a way to determine this based on track duration?
+                            return # maybe add device update here?
+                        else:
+                            current_playing.full_play = True
+                            current_playing.is_still_playing = False
+                    else:
+                        if (update.timestamp - played_at_utc).total_seconds() < 30: # TODO: add a way to determine this based on track duration?
+                            current_playing.full_play = False
+                        else:
+                            current_playing.full_play = True
+                        current_playing.is_still_playing = False
+
+                    self.db.add(current_playing)
+                    await self.db.flush()
+
+
+                new_play = PlaybackHistory(
+                    spotify_track_id=update.track.spotify_track,
+                    user_uuid = user.user_uuid,
+                    track_uuid = read_track.track_uuid,
+                    album_uuid =  self.pick_best_albums(read_track,update.track.album_name).album_uuid,
+                    source = update.source,
+                    device_uuid = device.device_uuid,
+                    full_play = False,
+                    is_still_playing = True
+                )
+                self.db.add(new_play)
+                await self.db.commit()
+
+                current_playing = await self.get_currently_playing(user)
+                curr_playing = CurrentlyPlaying.model_validate(current_playing)
+                curr_playing.is_still_playing = True
+                curr_playing.full_update = True
+                await self.send_currently_playing(user, curr_playing)
+        else:
+            logger.debug(f"Skipping {update}, unknown song")
+
+    def pick_best_albums(self, track, album_name: str) -> Optional[Album]:
+        if not track.albums:
+            return None
+
+        # 1. Try to match by album name
+        for album in track.albums:
+            if album_name.lower() in album.title.lower():
+                return album
+
+        # 2. Fallback: pick earliest by release_date (or default to 9999 if missing)
+        return sorted(
+            track.albums,
+            key=lambda a: a.release_date or datetime(9999, 1, 1)
+        )[0]
+
+    async def send_currently_playing(self, user: User, playing: CurrentlyPlaying):
+            message_model = CurrentlyPlaying.model_validate(playing)
+            await self.websocket_service.send_to_user(user.user_uuid, message_model)
+
+
+

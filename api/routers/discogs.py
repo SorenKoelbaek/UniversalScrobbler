@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import RedirectResponse
 from services.discogs_service import DiscogsService
+from services.collection_service import CollectionService
 from fastapi import Depends, Request
 from dependencies.auth import get_current_user
 from dependencies.database import get_async_session
@@ -15,13 +16,14 @@ router = APIRouter(
     tags=["discogs"]
 )
 
-discogs_service = DiscogsService()
 
 @router.get("/login")
 async def get_login_url(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_session),
 ):
+    discogs_service = DiscogsService(db)
+
     url = await discogs_service.get_redirect_url(user.user_uuid, db)
     return {"url": url}
 
@@ -32,6 +34,7 @@ async def authorize_discogs(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user),
 ):
+    discogs_service = DiscogsService(db)
     return await discogs_service.authorize_user(
         oauth_token=payload.oauth_token,
         oauth_verifier=payload.oauth_verifier,
@@ -39,28 +42,15 @@ async def authorize_discogs(
         db=db,
     )
 
-
-
 @router.post("/refresh/")
-async def refresh_collection(
+async def process_collection(
     background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_session),
 ):
-    background_tasks.add_task(discogs_service.update_user_collection, user.user_uuid, db)
+    collection_service = CollectionService(db=db)
+    background_tasks.add_task(collection_service.process_collection, user.user_uuid)
     return {"message": "Discogs collection refresh triggered in background."}
-
-@router.get("/search/",  response_model=TrackRead)
-async def search(
-    track_name: Optional[str] = None,
-    artist_name: Optional[str] = None,
-    album_name: Optional[str] = None,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_async_session),
-):
-    search_result = await discogs_service.get_data_from_discogs(user.user_uuid, db, artist_name, album_name, track_name)
-
-    return search_result
 
 
 @router.get("/me/")
@@ -68,5 +58,6 @@ async def get_me(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_session),
 ):
+    discogs_service = DiscogsService(db)
     identity = await discogs_service.get_identity(user.user_uuid, db)
     return identity

@@ -1,8 +1,10 @@
 from fastapi import FastAPI
-from routers import (auth_router, database, spotify, consumption, discogs, music, collection)
+from routers import (auth_router, database, spotify, consumption, discogs, music, collection, websocket)
+from fastapi.security import OAuth2PasswordBearer
 from routers import event
 from fastapi.middleware.cors import CORSMiddleware
-
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from dependencies.auth import get_current_user
 
 import asyncio
 from config import settings
@@ -23,14 +25,15 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",  # React dev server
-        "https://sorenkoelbaek.dk",  # Production domain
-        "https://api.sorenkoelbaek.dk",  # FastAPI endpoint for production
+        "*"
     ],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*","Authorization"],  # Allow Authorization header
+    allow_headers=["*"],  # Allow Authorization header
 )
+
+
+app.include_router(websocket.router)
 
 app.include_router(spotify.router)
 app.include_router(discogs.router)
@@ -38,7 +41,7 @@ app.include_router(collection.router)
 app.include_router(consumption.router)
 app.include_router(music.router)
 
-#app.include_router(event.router)
+app.include_router(event.router)
 app.include_router(auth_router.router)
 app.include_router(database.router)
 

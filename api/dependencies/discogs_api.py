@@ -25,7 +25,7 @@ class DiscogsAPI:
     def _rate_limit(self, remaining_calls: int):
         """Rate limit handler that pauses requests based on remaining calls."""
         if remaining_calls <= 10:
-            logger.info("Rate limit hit, sleeping for 60 seconds")
+            logger.debug("Rate limit hit, sleeping for 60 seconds")
             time.sleep(self.rate_limit_window)  # Sleep for the rate limit window time
 
     def get_collection(self, token: str, secret: str) -> list[dict]:
@@ -164,7 +164,7 @@ class DiscogsAPI:
             }
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"❌ Failed to fetch full release details for {release_id}: {e}")
+            logger.info(f"❌ Failed to fetch full release details for {release_id}: {e}")
             return None
 
     def get_artist(self, artist_id: int, token, secret) -> Optional[dict]:
@@ -182,28 +182,36 @@ class DiscogsAPI:
         )
 
         try:
-            response = oauth.get(url, headers={"User-Agent": "VinylScrobbler/1.0"})
+            response = oauth.get(url, headers=headers)
             response.raise_for_status()
             data = response.json()
 
+            if "name" not in data or "profile" not in data:
+                logger.warning(f"⚠️ Incomplete artist data for {artist_id}: {data}")
+
             return {
-                "discogs_artist_id": data["id"],
-                "name": data["name"],
+                "discogs_artist_id": data.get("id"),
+                "name": data.get("name"),  # Safe now
                 "namevariations": data.get("namevariations", []),
-                "profile": data["profile"],
+                "profile": data.get("profile"),  # Safe now
                 "quality": data.get("data_quality"),
             }
+
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Failed to fetch artist {artist_id}: {e}")
             return None
+        except Exception as e:
+            logger.exception(f"❌ Unexpected error fetching artist {artist_id}: {e}")
+            return None
 
-
-    def search(self, token, secret, type:str, artist:str = None, release_title:str = None, track: str= None) -> Optional[dict]:
+    def search(self, token, secret, type:str, query:str =None, artist:str = None, release_title:str = None, track: str= None) -> Optional[dict]:
         """Fetch artist details from Discogs and return the relevant data."""
         url = f"{self.base_url}/database/search?type={type}"
         headers = {
             "User-Agent": "VinylScrobbler/1.0"
         }
+        if query:
+            url += f"&query={query}"
         if artist:
             url += f"&artist={artist}"
         if track:
@@ -211,6 +219,7 @@ class DiscogsAPI:
         if release_title:
             url += f"&release_title={release_title}"
 
+        logger.debug(f"url: {url}")
         oauth = OAuth1Session(
             client_key=settings.DISCOGS_CONSUMER_KEY,
             client_secret=settings.DISCOGS_SECRET_KEY,
@@ -222,7 +231,7 @@ class DiscogsAPI:
             response = oauth.get(url, headers={"User-Agent": "VinylScrobbler/1.0"})
             response.raise_for_status()
             data = response.json()
-
+            logger.debug(f"data: {data}")
             if len(data.get("results", [])) > 0:
                 return data.get("results")
 

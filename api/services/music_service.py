@@ -2,18 +2,20 @@ from sqlmodel import select, or_
 from pydantic import BaseModel, TypeAdapter
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from models.sqlmodels import Album, Artist, Track
-from models.appmodels import AlbumRead, ArtistRead, TrackRead
+from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge
+from models.appmodels import AlbumRead, ArtistRead, TrackRead, TagBase
 from uuid import UUID
 from fastapi import HTTPException
 from typing import List, Optional
-from config import settings
 import logging
 logger = logging.getLogger(__name__)
-from services.discogs_service import DiscogsService
+from dependencies.musicbrainz_api import MusicBrainzAPI
+from services.musicbrainz_service import MusicBrainzService
+import re
+from rapidfuzz import fuzz
 
 
-discogs_service = DiscogsService()
+musicbrainz_api = MusicBrainzAPI()
 
 
 class MusicService:
@@ -22,11 +24,35 @@ class MusicService:
 
     async def get_album(self, album_uuid: UUID) -> AlbumRead:
         """Retrieve a single album based on UUID."""
-        result = await self.db.execute(select(Album).where(Album.album_uuid == album_uuid).options(selectinload(Album.artists), selectinload(Album.tracks)))
+        result = await self.db.execute(select(Album)
+                                       .where(Album.album_uuid == album_uuid)
+                                       .options(selectinload(Album.artists),
+                                                selectinload(Album.tracks)
+                                                ,selectinload(Album.tags)
+                                                ,selectinload(Album.genres)
+                                                ,selectinload(Album.releases)))
         album = result.scalar_one_or_none()
         if not album:
             raise HTTPException(status_code=404, detail="Album not found")
-        return AlbumRead.model_validate(album)  # Use model_validate instead of parse_obj
+            # Preload tag counts from bridge
+        tag_counts_result = await self.db.execute(
+            select(AlbumTagBridge.tag_uuid, AlbumTagBridge.count)
+            .where(AlbumTagBridge.album_uuid == album_uuid)
+        )
+        tag_counts = dict(tag_counts_result.all())
+
+        # Build the AlbumRead model and inject the tag counts
+        album_read = AlbumRead.model_validate(album)
+        album_read.tags = [
+            TagBase(
+                tag_uuid=tag.tag_uuid,
+                name=tag.name,
+                count=tag_counts.get(tag.tag_uuid, 0),
+            )
+            for tag in album.tags
+        ]
+
+        return album_read
 
     async def get_all_albums(self) -> List[AlbumRead]:
         """Retrieve all albums from the database."""
@@ -66,7 +92,7 @@ class MusicService:
         """Retrieve a single track based on UUID."""
         result = await self.db.execute(select(Track).where(Track.track_uuid == track_uuid)
                                        .options(
-            selectinload(Track.albums).selectinload(Album.artists)))
+            selectinload(Track.albums),selectinload(Track.artists)))
         track = result.scalar_one_or_none()
         if not track:
             raise HTTPException(status_code=404, detail="Track not found")
@@ -89,10 +115,17 @@ class MusicService:
             album_name: Optional[str] = None,
 
     ):
-        # Start with the basic query to select tracks
-        query = select(Track).options(selectinload(Track.albums).selectinload(Album.artists))
 
-        # Apply filters if parameters are provided (add them to the query, not overwrite)
+        query = (
+            select(Track)
+            .join(Track.artists)
+            .join(Track.albums)
+            .options(
+                selectinload(Track.artists),
+                selectinload(Track.albums)
+            )
+        )
+
         if track_name:
             query = query.where(Track.name.ilike(f"%{track_name}%"))
 
@@ -102,15 +135,50 @@ class MusicService:
         if album_name:
             query = query.where(Album.title.ilike(f"%{album_name}%"))
 
-        # Execute the query
         result = await self.db.execute(query)
         tracks = result.scalars().all()
+
         if not tracks:
-            new_tracks = await discogs_service.get_track_from_discogs(user_uuid, self.db, artist_name,album_name, track_name)
-            tracks = [new_tracks]
-        # Optionally return a simpler response with TrackRead
+            musicbrainz_service = MusicBrainzService(self.db, musicbrainz_api)
+            release_group_id = await musicbrainz_api.search_recording_and_return_release_id(track_name, artist_name, album_name)
+            if not release_group_id:
+                release_group_id = await musicbrainz_api.search_recording_and_return_release_id(track_name, artist_name)
+            if release_group_id:
+                album, album_release = await musicbrainz_service.get_or_create_album_from_musicbrainz_release(release_group_id, True)
+                await self.db.commit()
+                query = select(Track).options(
+                    selectinload(Track.albums),
+                            selectinload(Track.artists)
+                            ).where(Track.albums.any(Album.album_uuid == album.album_uuid))
+                result = await self.db.execute(query)
+                tracks = result.scalars().all()
+                if track_name:
+                    normalized_track_name = track_name.strip().lower()
+                    matching_tracks = [
+                        t for t in tracks
+                        if t.name and self.normalize(t.name) in normalized_track_name
+                    ]
+                    # If nothing found, try fuzzy match
+                    threshold = 85  # adjust for strictness
+                    if not matching_tracks:
+                        matching_tracks = [
+                            t for t in tracks
+                            if t.name and fuzz.partial_ratio(self.normalize(t.name), normalized_track_name) >= threshold
+                        ]
+                if not matching_tracks:
+                    logger.info(f"🤷 No match for '{track_name}' in album '{album.title}'")
+                else:
+                    tracks = matching_tracks
+
+        if not tracks:
+            return None
         track_list_adapter = TypeAdapter(list[TrackRead])
         return track_list_adapter.validate_python(tracks)
+
+
+    def normalize(self, name: str) -> str:
+        # Replace all dash variants with a plain hyphen, lowercase, strip whitespace
+        return re.sub(r"[-‐‑‒–—―]", "-", name.strip().lower())
 
     async def search_album(
             self,
@@ -127,13 +195,14 @@ class MusicService:
         if artist_name:
             query = query.where(Artist.name.ilike(f"%{artist_name}%"))
 
-
-        # Execute the query
         result = await self.db.execute(query)
         albums = result.scalars().all()
         if not albums:
-            new_albums = await discogs_service.get_album_from_discogs(user_uuid, self.db, artist_name, album_name)
-            albums = [new_albums]
+            musicbrainz_service = MusicBrainzService(self.db, musicbrainz_api)
+            release_id = await musicbrainz_api.get_first_release_id_by_artist_and_album(artist_name, album_name)
+            if release_id:
+                album, album_release = await musicbrainz_service.get_or_create_album_from_musicbrainz_release(release_id, True)
+                albums = [album]
         # Optionally return a simpler response with TrackRead
         track_list_adapter = TypeAdapter(list[AlbumRead])
         return track_list_adapter.validate_python(albums)

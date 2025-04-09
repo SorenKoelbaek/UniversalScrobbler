@@ -1,24 +1,39 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from services.musicbrainz_service import MusicBrainzService
 from models.appmodels import CollectionRead, CollectionSimple
 from dependencies.auth import get_current_user
 from dependencies.database import get_async_session
+from dependencies.musicbrainz_api import MusicBrainzAPI
 from models.sqlmodels import *
 from sqlmodel import select, delete
 from config import settings
 import logging
 logger = logging.getLogger(__name__)
-
+from scripts.import_collection import ImportCollection
 router = APIRouter(
     prefix="/database",
     tags=["database"]
 )
+
+
+@router.put("/import_musicbrainz")
+async def import_database(db: AsyncSession = Depends(get_async_session)):
+    import_collection = ImportCollection(db)
+    # woop = await import_collection.import_data("artist")
+    woop = await import_collection.import_data("release-group")
+    woop = await import_collection.import_data("release")
+
+    return {"Success"}
+
+
 
 @router.delete("/delete_all")
 async def delete_all(db: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user)):
     try:
         if user.username == "sorenkoelbaek":
             # Deleting all records from the tables excluding User, SpotifyToken, DiscogsToken
+            await db.execute(delete(PlaybackHistory))
             await db.execute(delete(ArtistBridge))
             await db.execute(delete(AlbumArtistBridge))
             await db.execute(delete(AlbumReleaseArtistBridge))
@@ -28,7 +43,16 @@ async def delete_all(db: AsyncSession = Depends(get_async_session), user: User =
             await db.execute(delete(CollectionAlbumBridge))
             await db.execute(delete(CollectionAlbumReleaseBridge))
             await db.execute(delete(TrackVersionAlbumReleaseBridge))
+            await db.execute(delete(TrackVersionTagBridge))
+            await db.execute(delete(TrackVersionGenreBridge))
             await db.execute(delete(TrackVersion))
+            await db.execute(delete(AlbumTagBridge))
+            await db.execute(delete(AlbumGenreBridge))
+            await db.execute(delete(AlbumReleaseTagBridge))
+            await db.execute(delete(AlbumReleaseGenreBridge))
+            await db.execute(delete(ArtistTagBridge))
+
+            await db.execute(delete(Tag))
             await db.execute(delete(Track))
             await db.execute(delete(Collection))
             await db.execute(delete(AlbumRelease))

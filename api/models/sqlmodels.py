@@ -10,6 +10,16 @@ from datetime import datetime
 def now_utc_naive():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
+class RefreshToken(SQLModel, table=True):
+    __tablename__ = "refresh_token"
+    refresh_token_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_uuid: UUID = Field(index=True, nullable=False)
+    token: str  # store this raw or hashed
+    created_at: datetime = Field(
+        default_factory=now_utc_naive,
+        sa_column_kwargs={"server_default": func.now()}
+    )
+    revoked: bool = Field(default=False)
 
 class User(SQLModel, table=True):
     """SQL representation of a user."""
@@ -30,9 +40,82 @@ class User(SQLModel, table=True):
     password: str
     spotify_token: Optional["SpotifyToken"] = Relationship(back_populates="user")
     discogs_token: Optional["DiscogsToken"] = Relationship(back_populates="user")
-    playback_history: List["PlaybackHistory"] = Relationship(back_populates="user")
     collections: List["Collection"] = Relationship(back_populates="user")
 
+class TrackVersionTagBridge(SQLModel, table=True):
+    __tablename__ = "track_version_tag_bridge"
+
+    track_version_uuid: UUID = Field(foreign_key="track_version.track_version_uuid", primary_key=True)
+    tag_uuid: UUID = Field(foreign_key="tag.tag_uuid", primary_key=True)
+    count: int = 0  # from MusicBrainz 'count'
+    created_at: datetime = Field(default_factory=now_utc_naive, sa_column_kwargs={"server_default": func.now()})
+
+class TrackVersionGenreBridge(SQLModel, table=True):
+    __tablename__ = "track_version_genre_bridge"
+
+    track_version_uuid: UUID = Field(foreign_key="track_version.track_version_uuid", primary_key=True)
+    genre_uuid: UUID = Field(foreign_key="genre.genre_uuid", primary_key=True)
+    count: int = 0  # from MusicBrainz 'count'
+    created_at: datetime = Field(default_factory=now_utc_naive, sa_column_kwargs={"server_default": func.now()})
+
+class AlbumTagBridge(SQLModel, table=True):
+    __tablename__ = "album_tag_bridge"
+
+    album_uuid: UUID = Field(foreign_key="album.album_uuid", primary_key=True)
+    tag_uuid: UUID = Field(foreign_key="tag.tag_uuid", primary_key=True)
+    count: int = 0
+
+class AlbumGenreBridge(SQLModel, table=True):
+    __tablename__ = "album_genre_bridge"
+
+    album_uuid: UUID = Field(foreign_key="album.album_uuid", primary_key=True)
+    genre_uuid: UUID = Field(foreign_key="genre.genre_uuid", primary_key=True)
+    count: int = 0
+
+class AlbumReleaseTagBridge(SQLModel, table=True):
+    __tablename__ = "album_release_tag_bridge"
+
+    album_release_uuid: UUID = Field(foreign_key="album_release.album_release_uuid", primary_key=True)
+    tag_uuid: UUID = Field(foreign_key="tag.tag_uuid", primary_key=True)
+    count: int = 0
+
+class ArtistTagBridge(SQLModel, table=True):
+    __tablename__ = "artist_tag_bridge"
+    artist_uuid: UUID = Field(foreign_key="artist.artist_uuid", primary_key=True)
+    tag_uuid: UUID = Field(foreign_key="tag.tag_uuid", primary_key=True)
+    count: int = 0
+
+class AlbumReleaseGenreBridge(SQLModel, table=True):
+    __tablename__ = "album_release_genre_bridge"
+
+    album_release_uuid: UUID = Field(foreign_key="album_release.album_release_uuid", primary_key=True)
+    genre_uuid: UUID = Field(foreign_key="genre.genre_uuid", primary_key=True)
+    count: int = 0
+
+class Tag(SQLModel, table=True):
+    __tablename__ = "tag"
+
+    tag_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
+    name: str
+    created_at: datetime = Field(default_factory=now_utc_naive, sa_column_kwargs={"server_default": func.now()})
+
+    albums: List["Album"] = Relationship(back_populates="tags", link_model=AlbumTagBridge)
+    album_releases: List["AlbumRelease"] = Relationship(back_populates="tags", link_model=AlbumReleaseTagBridge)
+    # inside Tag:
+    track_versions: List["TrackVersion"] = Relationship(back_populates="tags", link_model=TrackVersionTagBridge)
+    artists: List["Artist"] = Relationship(back_populates="tags", link_model=ArtistTagBridge)
+
+
+class Genre(SQLModel, table=True):
+    __tablename__ = "genre"
+
+    genre_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
+    name: str
+    created_at: datetime = Field(default_factory=now_utc_naive, sa_column_kwargs={"server_default": func.now()})
+
+    albums: List["Album"] = Relationship(back_populates="genres", link_model=AlbumGenreBridge)
+    album_releases: List["AlbumRelease"] = Relationship(back_populates="genres", link_model=AlbumReleaseGenreBridge)
+    track_versions: List["TrackVersion"] = Relationship(back_populates="genres", link_model=TrackVersionGenreBridge)
 
 class DiscogsOAuthTemp(SQLModel, table=True):
     __tablename__ = "discogs_oauth_temp"
@@ -92,28 +175,35 @@ class AlbumReleaseArtistBridge(SQLModel, table=True):
     album_release_uuid: UUID = Field(foreign_key="album_release.album_release_uuid", primary_key=True)
     artist_uuid: UUID = Field(foreign_key="artist.artist_uuid", primary_key=True)
 
+class Device(SQLModel, table=True):
+    __tablename__ = "device"
+    device_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
+    device_id: str
+    device_name: str
+    user_uuid: UUID = Field(foreign_key="appuser.user_uuid")
+    location: Optional[str] = None
+    context: Optional[str] = None
+
 class PlaybackHistory(SQLModel, table=True):
     __tablename__ = "playback_history"
 
     playback_history_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
     user_uuid: UUID = Field(foreign_key="appuser.user_uuid")
-
+    track_version_uuid: Optional[UUID] = Field(foreign_key="track_version.track_version_uuid")
     track_uuid: Optional[UUID] = Field(foreign_key="track.track_uuid")
-    artist_uuid: Optional[UUID] = Field(foreign_key="artist.artist_uuid")
     album_uuid: Optional[UUID] = Field(foreign_key="album.album_uuid")
-    album_release_uuid: Optional[UUID] = Field(foreign_key="album_release.album_release_uuid")
-    spotify_track_id: Optional[str]
-    played_at: datetime
+    played_at: datetime = Field(
+        default_factory=now_utc_naive,
+        sa_column_kwargs={"server_default": func.now()}
+    )
     source: str = "spotify"
-    device_name: Optional[str] = None
-    duration_ms: Optional[int] = None
-    progress_ms: Optional[int] = None
+    device_uuid: UUID = Field(foreign_key="device.device_uuid")
+    device: Optional["Device"] = Relationship()
     full_play: bool = False
-    is_still_playing: bool = False
-
-    user: Optional["User"] = Relationship(back_populates="playback_history")
+    is_still_playing: bool = True
+    spotify_track_id: Optional[str] = None
+    user: Optional["User"] = Relationship()
     track: Optional["Track"] = Relationship()
-    artist: Optional["Artist"] = Relationship()
     album: Optional["Album"] = Relationship()
 
 class TrackVersionAlbumReleaseBridge(SQLModel, table=True):
@@ -123,14 +213,12 @@ class TrackVersionAlbumReleaseBridge(SQLModel, table=True):
     album_release_uuid: UUID = Field(foreign_key="album_release.album_release_uuid", primary_key=True)
     track_number: Optional[str] = Field(default=None, nullable=True)
 
-
 class TrackAlbumBridge(SQLModel, table=True):
     __tablename__ = "track_album_bridge"
 
     track_uuid: UUID = Field(foreign_key="track.track_uuid", primary_key=True)
     album_uuid: UUID = Field(foreign_key="album.album_uuid", primary_key=True)
     track_number: Optional[str] = Field(default=None, nullable=True)
-
 
 class Album(SQLModel, table=True):
     __tablename__ = "album"
@@ -142,17 +230,21 @@ class Album(SQLModel, table=True):
     release_date: Optional[datetime]
     discogs_master_id: Optional[int]
     discogs_main_release_id: Optional[int] = None
+    musicbrainz_release_group_id: Optional[str] = Field(default=None, index=True)
     tracks: List["Track"] = Relationship(back_populates="albums",
                                          link_model=TrackAlbumBridge)  # Use TrackAlbumBridge to link tracks to this album
+    tags: List["Tag"] = Relationship(back_populates="albums", link_model=AlbumTagBridge)
+    genres: List["Genre"] = Relationship(back_populates="albums", link_model=AlbumGenreBridge)
 
     artists: List["Artist"] = Relationship(back_populates="albums", link_model=AlbumArtistBridge)
     releases: List["AlbumRelease"] = Relationship(back_populates="album")
+    image_url: Optional[str]
+    image_thumbnail_url: Optional[str]
     created_at: datetime = Field(
         default_factory=now_utc_naive,
         sa_column_kwargs={"server_default": func.now()}
     )
     quality: Optional[str]
-
 
 class AlbumRelease(SQLModel, table=True):
     __tablename__ = "album_release"
@@ -162,6 +254,7 @@ class AlbumRelease(SQLModel, table=True):
     title: str
     is_main_release: bool = False
     discogs_release_id: Optional[int]  # maybe a release doesn't have to exist on Discogs? - bootlegs?
+    musicbrainz_release_id: Optional[str] = Field(default=None, index=True)  # NEW
     country: Optional[str]
     release_date: Optional[datetime]
 
@@ -170,6 +263,8 @@ class AlbumRelease(SQLModel, table=True):
         back_populates="album_releases",
         link_model=TrackVersionAlbumReleaseBridge
     )
+    tags: List["Tag"] = Relationship(back_populates="album_releases", link_model=AlbumReleaseTagBridge)
+    genres: List["Genre"] = Relationship(back_populates="album_releases", link_model=AlbumReleaseGenreBridge)
 
     artists: List["Artist"] = Relationship(back_populates="album_releases", link_model=AlbumReleaseArtistBridge)
     image_url: Optional[str]
@@ -180,7 +275,6 @@ class AlbumRelease(SQLModel, table=True):
     )
     quality: Optional[str]
 
-
 class TrackArtistBridge(SQLModel, table=True):
     __tablename__ = "track_artist_bridge"
 
@@ -189,7 +283,7 @@ class TrackArtistBridge(SQLModel, table=True):
 
 class Artist(SQLModel, table=True):
     __tablename__ = "artist"
-
+    musicbrainz_artist_id: Optional[str] = Field(default=None, index=True)
     artist_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
     discogs_artist_id: Optional[int]
     name: str
@@ -218,14 +312,15 @@ class Artist(SQLModel, table=True):
         back_populates="artists",
         link_model=TrackArtistBridge
     )
+    tags: List["Tag"] = Relationship(back_populates="artists", link_model=ArtistTagBridge)
     quality: Optional[str]
-
 
 class Track(SQLModel, table=True):
     __tablename__ = "track"
 
     track_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
     name: str
+    duration: Optional[int] = 0
     albums: List[Album] = Relationship(
         back_populates="tracks", link_model=TrackAlbumBridge
     )
@@ -233,6 +328,7 @@ class Track(SQLModel, table=True):
         back_populates="tracks",
         link_model=TrackArtistBridge  # Link to TrackArtistBridge to link artists
     )
+    track_versions: List["TrackVersion"] = Relationship(back_populates="track")
 
 
 class TrackVersionExtraArtist(SQLModel, table=True):
@@ -251,10 +347,9 @@ class TrackVersionExtraArtist(SQLModel, table=True):
 class TrackVersion(SQLModel, table=True):
     __tablename__ = "track_version"
     track_version_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
+    recording_id: Optional[str] = Field(default=None, index=True, unique=False)
     track_uuid: UUID = Field(foreign_key="track.track_uuid")
-    duration: Optional[str]  # optionally a time-aspect instead?
-
-    # Define relationship with AlbumRelease using SQLModel's Relationship
+    duration: Optional[int] = 0
     album_releases: List[AlbumRelease] = Relationship(
         back_populates="track_versions",
         link_model=TrackVersionAlbumReleaseBridge
@@ -266,7 +361,9 @@ class TrackVersion(SQLModel, table=True):
     )
     quality: Optional[str]
     extra_artists: List[TrackVersionExtraArtist] = Relationship(back_populates="track_version")
-
+    tags: List["Tag"] = Relationship(back_populates="track_versions", link_model=TrackVersionTagBridge)
+    genres: List["Genre"] = Relationship(back_populates="track_versions", link_model=TrackVersionGenreBridge)
+    track: Optional["Track"] = Relationship(back_populates="track_versions")
 
 class CollectionAlbumBridge(SQLModel, table=True):
     __tablename__ = "collection_album_bridge"
@@ -295,3 +392,4 @@ class Collection(SQLModel, table=True):
         default_factory=now_utc_naive,
         sa_column_kwargs={"server_default": func.now()}
     )
+

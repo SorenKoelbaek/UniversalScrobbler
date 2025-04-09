@@ -3,25 +3,49 @@ from uuid import UUID
 from pydantic import BaseModel, EmailStr, field_serializer, field_validator, model_validator, Field, AliasPath
 from datetime import datetime, timezone
 
+class DeviceBase(BaseModel):
+    device_uuid: UUID
+    device_name: str
+    location: Optional[str] = None
+    context : Optional[str] = None
 
 class PlaybackHistoryBase(BaseModel):
+    playback_history_uuid:UUID
     spotify_track_id: Optional[str]
-    track_name: str
-    artist_name: str
-    album_name: str
-    discogs_release_id: Optional[int]
     played_at: datetime
-    source: str = "spotify"
-    device_name: Optional[str] = None
-    progress_ms: Optional[int]
-    duration_ms: Optional[int]
+    source: Optional[str]
     full_play: Optional[bool] = False
 
-class CurrentlyPlaying(PlaybackHistoryBase):
-    is_still_playing: bool
+    class Config:
+        from_attributes=True
 
 class PlaybackHistoryRead(PlaybackHistoryBase):
-    playback_history_uuid: UUID
+    track: "TrackBase"
+    album: "AlbumSimple"
+    device: DeviceBase
+
+    class Config:
+        from_attributes=True
+
+
+class PlaybackHistorySimple(PlaybackHistoryBase):
+    track_uuid: UUID
+    album_uuid: UUID
+    song_title:str = Field(..., alias=AliasPath("track", "name"))
+    album_title: str = Field(..., alias=AliasPath("album", "title"))
+    artists: List["ArtistBase"] = Field(..., alias=AliasPath("album", "artists"))
+    release_date: Optional[datetime] = Field(..., alias=AliasPath("album", "release_date"))
+    full_update: Optional[bool] = False
+
+    class Config:
+        from_attributes=True
+
+class CurrentlyPlaying(PlaybackHistorySimple):
+    is_still_playing: bool
+
+
+    class Config:
+        from_attributes=True
 
 class SpotifyTokenRead(BaseModel):
     spotify_token_uuid: UUID
@@ -80,10 +104,10 @@ class ArtistBase(BaseModel):
         from_attributes=True
 
 class AlbumBase(BaseModel):
+    image_url: Optional[str] = None
+    image_thumbnail_url: Optional[str] = None
     album_uuid: UUID
     title: str
-    styles: Optional[str] = None
-    country: Optional[str] = None
     discogs_master_id: Optional[int] = None  # Master ID for the album
     release_date: Optional[datetime] = None
 
@@ -106,8 +130,8 @@ class AlbumReleaseBase(BaseModel):
         from_attributes=True
 
 class TrackRead(TrackBase):
-    albums: List[AlbumSimpleRead]  # The album (master) this track belongs to
-
+    albums: List[AlbumBase]
+    artists: List[ArtistBase]
     class Config:
         from_attributes=True
 
@@ -128,10 +152,28 @@ class AlbumSimple(AlbumBase):
     class Config:
         from_attributes=True
 
+class TagBase(BaseModel):
+    tag_uuid: UUID
+    name: str
+    count: Optional[int] = 0  # Number of times this tag is used
+
+    class Config:
+        from_attributes=True
+
+class GenreBase(BaseModel):
+    genre_uuid: UUID
+    name: str
+
+    class Config:
+        from_attributes=True
+
+
 # AlbumRead reflects the "master album" which may have many releases
 class AlbumRead(AlbumBase):
+    releases: List[AlbumReleaseBase]  # List of releases for this master album
     artists: List[ArtistBase]  # List of artists associated with this master album
     tracks: List[TrackBase]  # List of tracks for this master album (not specific to any release)
+    tags: List[TagBase] = []  # List of genres associated with this album
 
     class Config:
         from_attributes=True
@@ -139,12 +181,13 @@ class AlbumRead(AlbumBase):
 class AlbumReleaseFlat(BaseModel):
     album_release_uuid: UUID
     album_title: str = Field(..., alias=AliasPath("album", "title"))
+    album_uuid: UUID = Field(..., alias=AliasPath("album", "album_uuid"))
     release_date: Optional[datetime] = Field(..., alias=AliasPath("album", "release_date"))
-    image_url: str
-    image_thumbnail_url: str
+    image_url: Optional[str] = Field(..., alias=AliasPath("album", "image_url"))
+    image_thumbnail_url: Optional[str] = Field(..., alias=AliasPath("album", "image_thumbnail_url"))
     class Config:
         from_attributes=True
-    artists: List[ArtistBase]
+    artists: List[ArtistBase] = Field(..., alias=AliasPath("album", "artists"))
     class Config:
         from_attributes = True
 
@@ -180,7 +223,7 @@ class CollectionSimple(CollectionBase):
     class Config:
         from_attributes=True
 
-class CollectionSimpleRead(CollectionSimple):
+class CollectionSimpleRead(CollectionBase):
     album_releases: list[AlbumReleaseFlat]
 
     class Config:
@@ -198,3 +241,28 @@ class CollectionRead(CollectionBase):
 class MusicSearchResponse(BaseModel):
     type: str
     result: Union[List[TrackRead],List[AlbumRead],List[ArtistRead]]
+
+
+class PlaybackUpdateTrack(BaseModel):
+    song_name: Optional[str]
+    artist_name: Optional[str]
+    album_name: Optional[str]
+    spotify_track: Optional[str]
+
+
+class PlaybackUpdateDevice(BaseModel):
+    device_id: Optional[str]
+    device_name: Optional[str]
+
+
+class PlaybackUpdatePayload(BaseModel):
+    state: Optional[str]
+    source: Optional[str]  # NEW: 'spotify' or 'shazam'
+    track: Optional[PlaybackUpdateTrack]
+    device: Optional[PlaybackUpdateDevice]
+    timestamp: Optional[datetime] = datetime.now(timezone.utc)
+
+
+class websocketMessage(BaseModel):
+    type: Optional[str]
+    payload: Optional[dict]

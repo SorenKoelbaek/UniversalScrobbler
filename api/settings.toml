@@ -1,5 +1,7 @@
 [default]
 LOCAL = "true"
+APPNAME="CrateDigger"
+APP_VERSION="0.1"
 
 [prod]
 LOCAL = "false"

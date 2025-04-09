@@ -22,16 +22,14 @@ const Dashboard = () => {
 
         <Grid item xs={12} sm={6} md={4}>
           <Card>
-            <CardContent>
-              <TopTracksCard />
-            </CardContent>
+
           </Card>
         </Grid>
 
         <Grid item xs={12} sm={6} md={4}>
           <Card>
             <CardContent>
-              <LiveSessionCard token={auth?.token} />
+
             </CardContent>
           </Card>
         </Grid>
