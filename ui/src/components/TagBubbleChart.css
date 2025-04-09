@@ -1,0 +1,41 @@
+.bubble-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  align-items: center;
+  padding: 16px;
+}
+
+.bubble {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  border-radius: 50%;
+  text-align: center;
+  padding: 8px;
+  color: white;
+  transition: transform 0.2s ease;
+  user-select: none;
+}
+
+/* Optional hover effect without size distortion */
+.bubble:hover {
+  opacity: 0.9;
+  transform: scale(1.05);
+}
+
+/* Rotating colors */
+.color-0 { background-color: #6a1b9a; }
+.color-1 { background-color: #00796b; }
+.color-2 { background-color: #c62828; }
+.color-3 { background-color: #283593; }
+.color-4 { background-color: #ef6c00; }
+.color-5 { background-color: #2e7d32; }
+
+.bubble-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 4px;
+}
