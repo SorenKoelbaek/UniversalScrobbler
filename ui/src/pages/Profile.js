@@ -86,7 +86,7 @@ const Profile = () => {
     setLoading(true);
     setSuccess(false);
     try {
-      await apiClient.delete("/database/import_musicbrainz");
+      await apiClient.put("/database/import_musicbrainz");
       setSuccess(true);
     } catch (error) {
       console.error("Failed to trigger database refresh:", error);
@@ -158,7 +158,7 @@ const Profile = () => {
                 disabled={loading}
                 sx={{ mt: 2 }}
               >
-                {loading ? <CircularProgress size={24} /> : "Rebuild collection"}
+                {loading ? <CircularProgress size={24} /> : "Empty the storage"}
               </Button>
              <Button
                 variant="contained"
@@ -167,7 +167,7 @@ const Profile = () => {
                 disabled={loading}
                 sx={{ mt: 2 }}
               >
-                {loading ? <CircularProgress size={24} /> : "Empty the storage"}
+                {loading ? <CircularProgress size={24} /> : "Rebuild collection"}
               </Button>
               {success && (
                 <Typography variant="body2" color="success.main" sx={{ mt: 1 }}>
