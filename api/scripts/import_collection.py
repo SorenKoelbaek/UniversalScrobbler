@@ -131,14 +131,14 @@ class ImportCollection:
                         else:
                             raise NotImplementedError(f"Unknown folder name: {folder_name}")
 
-                        await self.db.commit()
-
                         # ✅ Log every 1000 records
                         if i % 1000 == 0:
+                            await self.db.commit()
                             elapsed = (datetime.now() - start).total_seconds()
                             start = datetime.now()
                             print(f"[{folder_name}] Processed {i} records in {elapsed:.2f} seconds")
 
+                    await self.db.commit()
                     break
             else:
                 raise ValueError(f"No matching mbdump/{folder_name} entry found in tar")
