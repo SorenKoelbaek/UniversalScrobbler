@@ -91,7 +91,7 @@ class ImportCollection:
                     return int(match.group(1))
         return None
 
-    async def create_album_release_from_release_data(self, release_data: dict):
+    async def create_album_release_from_release_data(self, release_data: dict, artist_collection: dict, tag_collection: dict):
         release_group_data = release_data["release-group"]
 
         album = await self.musicbrainz_service.get_or_create_album_from_release_group_simple(release_group_data)
@@ -109,14 +109,16 @@ class ImportCollection:
                     recording["recording_id"] = recording["id"]
                     recordings_data.append(recording)
 
-        await self.musicbrainz_service.create_tracks_and_versions_simple(
+        artists, tags = await self.musicbrainz_service.create_tracks_and_versions_simple(
             album=album,
             album_release=album_release,
             media_tracks=media_tracks,
-            recordings_data=recordings_data
+            recordings_data=recordings_data,
+            artist_collection=artist_collection,
+            tag_collection=tag_collection
         )
         # Now just reuse the existing method
-        return album_release
+        return artists, tags
 
     def normalize_tag_name(self, name: str) -> str:
         name = name.strip().lower()
@@ -133,6 +135,8 @@ class ImportCollection:
         with tarfile.open(path, "r:xz") as tar:
             for member in tar:
                 if member.name.endswith(f"mbdump/{folder_name}"):
+                    artist_collection: dict[str, Artist] = {}
+                    tag_collection: dict[str, Tag] = {}
                     start = datetime.now()
                     f = tar.extractfile(member)
                     if not f:
@@ -145,12 +149,18 @@ class ImportCollection:
                         elif folder_name == "release-group":
                             await self.import_album_from_release_group(data)
                         elif folder_name == "release":
-                            await self.create_album_release_from_release_data(data)
+                            new_artists, new_tags  = await self.create_album_release_from_release_data(data, artist_collection, tag_collection)
+                            for artist in new_artists:
+                                key = artist.musicbrainz_artist_id or artist.name.strip().lower()
+                                artist_collection[key] = artist
+                            for tag in new_tags:
+                                key = tag.name.strip().lower()
+                                tag_collection[key] = tag
                         else:
                             raise NotImplementedError(f"Unknown folder name: {folder_name}")
 
                         # ✅ Log every 1000 records
-                        if i % 1000 == 0:
+                        if i % 100 == 0:
                             await self.db.commit()
                             elapsed = (datetime.now() - start).total_seconds()
                             start = datetime.now()
