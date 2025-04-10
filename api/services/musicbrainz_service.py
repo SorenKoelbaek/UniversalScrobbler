@@ -191,7 +191,7 @@ class MusicBrainzService:
                     count=genre.get("count", 0)
                 ))
 
-        return album.scalar_one()
+        return album
 
     # Create Album from Release Group
     async def get_or_create_album_from_release_group(self, release_group_data: dict) -> Album:
