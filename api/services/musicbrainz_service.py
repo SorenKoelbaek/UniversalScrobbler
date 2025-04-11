@@ -307,11 +307,14 @@ class MusicBrainzService:
         for credit in data.get("artist-credit", []):
             artist_data = credit.get("artist")
             if artist_data:
+
                 artist = await self.get_or_create_artist_by_name(artist_data["name"], artist_data.get("id"))
-                self.db.add(AlbumReleaseArtistBridge(
+                stmt = insert(AlbumReleaseArtistBridge).values(
                     album_release_uuid=album_release.album_release_uuid,
                     artist_uuid=artist.artist_uuid
-                ))
+                ).on_conflict_do_nothing()
+                await self.db.execute(stmt)
+
 
         # Add tags to the album release using the AlbumReleaseTagBridge
         for tag in data.get("tags", []):
