@@ -18,7 +18,7 @@ api_dir = os.path.dirname(script_dir)
 sys.path.append(api_dir)
 from sqlmodel import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
-from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge, ArtistTagBridge
+from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge, ArtistTagBridge, AlbumRelease
 import re
 from typing import Optional
 import asyncio
@@ -35,7 +35,7 @@ class ImportCollection:
     def __init__(self, db: AsyncSession, ):
             self.db = db
             self.musicbrainz_api = MusicBrainzAPI()
-            self.musicbrainz_service = MusicBrainzService(self.db, self.musicbrainz_api)
+            self.musicbrainz_service: Optional[MusicBrainzService] = None
 
     async def import_artist_from_musicbrainz(self, data: dict) -> Artist:
         name = data["name"]
@@ -91,7 +91,7 @@ class ImportCollection:
                     return int(match.group(1))
         return None
 
-    async def create_album_release_from_release_data(self, release_data: dict, artist_collection: dict, tag_collection: dict):
+    async def create_album_release_from_release_data(self, release_data: dict):
         release_group_data = release_data["release-group"]
 
         album = await self.musicbrainz_service.get_or_create_album_from_release_group_simple(release_group_data)
@@ -109,16 +109,14 @@ class ImportCollection:
                     recording["recording_id"] = recording["id"]
                     recordings_data.append(recording)
 
-        artists, tags = await self.musicbrainz_service.create_tracks_and_versions_simple(
+        artists = await self.musicbrainz_service.create_tracks_and_versions_simple(
             album=album,
             album_release=album_release,
             media_tracks=media_tracks,
             recordings_data=recordings_data,
-            artist_collection=artist_collection,
-            tag_collection=tag_collection
         )
         # Now just reuse the existing method
-        return artists, tags
+        return artists
 
     def normalize_tag_name(self, name: str) -> str:
         name = name.strip().lower()
@@ -132,11 +130,37 @@ class ImportCollection:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Expected file {path} not found")
 
+        # 🔃 Preload all known artists into cache (MBID → UUID)
+        result = await self.db.execute(select(Artist.artist_uuid, Artist.musicbrainz_artist_id))
+        self.artist_cache = {
+            mbid: uuid for uuid, mbid in result.all() if mbid
+        }
+        result = await self.db.execute(select(Album.album_uuid, Album.musicbrainz_release_group_id))
+        self.album_cache = {
+            mbid: uuid for uuid, mbid in result.all() if mbid
+        }
+
+        result = await self.db.execute(select(Tag.tag_uuid, Tag.name))
+        self.tag_cache = {
+            self.normalize_tag_name(name): uuid for uuid, name in result.all()
+        }
+
+        result = await self.db.execute(select(AlbumRelease.musicbrainz_release_id))
+        self.existing_release_ids = set(row[0] for row in result.all() if row[0])
+
+
+        #after the cache is created, we can create the musicbrainz service
+        self.musicbrainz_service = MusicBrainzService(
+            self.db,
+            self.musicbrainz_api,
+            artist_cache=self.artist_cache,
+            album_cache=self.album_cache,
+            tag_cache=self.tag_cache
+        )
+
         with tarfile.open(path, "r:xz") as tar:
             for member in tar:
                 if member.name.endswith(f"mbdump/{folder_name}"):
-                    artist_collection: dict[str, Artist] = {}
-                    tag_collection: dict[str, Tag] = {}
                     start = datetime.now()
                     f = tar.extractfile(member)
                     if not f:
@@ -149,18 +173,15 @@ class ImportCollection:
                         elif folder_name == "release-group":
                             await self.import_album_from_release_group(data)
                         elif folder_name == "release":
-                            new_artists, new_tags  = await self.create_album_release_from_release_data(data, artist_collection, tag_collection)
-                            for artist in new_artists:
-                                key = artist.musicbrainz_artist_id or artist.name.strip().lower()
-                                artist_collection[key] = artist
-                            for tag in new_tags:
-                                key = tag.name.strip().lower()
-                                tag_collection[key] = tag
+                            musicbrainz_release_id = data.get("id")
+                            if musicbrainz_release_id in self.existing_release_ids:
+                                continue  # ✅ Skip already imported release
+                            new_artists  = await self.create_album_release_from_release_data(data)
                         else:
                             raise NotImplementedError(f"Unknown folder name: {folder_name}")
 
                         # ✅ Log every 1000 records
-                        if i % 100 == 0:
+                        if i % 1000 == 0:
                             await self.db.commit()
                             elapsed = (datetime.now() - start).total_seconds()
                             start = datetime.now()

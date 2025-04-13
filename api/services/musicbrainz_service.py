@@ -50,9 +50,29 @@ def parse_date(date_str: Optional[str]) -> Optional[date]:
         return None
 
 class MusicBrainzService:
-    def __init__(self, db: AsyncSession, api: MusicBrainzAPI):
+    def __init__(self, db: AsyncSession, api: MusicBrainzAPI, artist_cache: Optional[dict[str, UUID]] = None, album_cache: Optional[dict[str, UUID]] = None, tag_cache: Optional[dict[str, UUID]] = None):
         self.db = db
         self.api = api
+        self.artist_cache = artist_cache or {}
+        self.album_cache = album_cache or {}
+        self.tag_cache = tag_cache or {}
+
+    async def get_or_create_tag_simple(self, name: str) -> Tag:
+        normalized = self.normalize_tag_name(name)
+
+        # Cache hit
+        tag_uuid = self.tag_cache.get(normalized)
+        if tag_uuid:
+            return Tag(tag_uuid=tag_uuid)
+
+        # Create new tag
+        tag = Tag(name=normalized)
+        self.db.add(tag)
+        await self.db.flush()
+
+        # Update cache for future use
+        self.tag_cache[normalized] = tag.tag_uuid
+        return tag
 
     # Tag and Genre Creation
     async def get_or_create_tag(self, name: str, cache: Optional[dict] = None) -> Tag:
@@ -83,6 +103,20 @@ class MusicBrainzService:
         self.db.add(genre)
         await self.db.flush()
         return genre
+
+    async def get_or_create_artist_by_name_simple(
+            self,
+            name: str,
+            musicbrainz_artist_id: str = None
+    ) -> Artist:
+        if not musicbrainz_artist_id:
+            raise ValueError(f"Missing MusicBrainz ID for artist: {name}")
+
+        artist_uuid = self.artist_cache.get(musicbrainz_artist_id)
+        if not artist_uuid:
+            raise ValueError(f"Artist with MBID {musicbrainz_artist_id} not found in preload cache")
+
+        return Artist(artist_uuid=artist_uuid)
 
     async def get_or_create_artist_by_name(
             self,
@@ -124,17 +158,12 @@ class MusicBrainzService:
         return name.strip()
 
 
-    # Create Album from Release Group
     async def get_or_create_album_from_release_group_simple(self, release_group_data: dict) -> Album:
         musicbrainz_id = release_group_data["id"]
-        result = await self.db.execute(
-            select(Album)
-            .where(Album.musicbrainz_release_group_id == musicbrainz_id)
-            )
-        album = result.scalar_one_or_none()
-        if album:
-            return album
+        album_uuid = self.album_cache.get(musicbrainz_id)
 
+        if album_uuid:
+            return Album(album_uuid=album_uuid)
         # Create the album object without the tags field
         album = Album(
             title=release_group_data["title"],
@@ -160,7 +189,7 @@ class MusicBrainzService:
         # Add tags to the album using the AlbumTagBridge
         for tag in release_group_data.get("tags", []):
             tag_name = self.normalize_tag_name(tag["name"])
-            tag_obj = await self.get_or_create_tag(tag_name)
+            tag_obj = await self.get_or_create_tag_simple(tag_name)
             # Check if the tag already exists in the database
             result = await self.db.execute(
                 select(AlbumTagBridge)
@@ -292,7 +321,7 @@ class MusicBrainzService:
 
         release_date = parse_date(data.get("date"))
         album_release = AlbumRelease(
-            album=album,
+            album_uuid=album.album_uuid,
             title=data["title"],
             country=data.get("country"),
             release_date=release_date,
@@ -308,7 +337,7 @@ class MusicBrainzService:
             artist_data = credit.get("artist")
             if artist_data:
 
-                artist = await self.get_or_create_artist_by_name(artist_data["name"], artist_data.get("id"))
+                artist = await self.get_or_create_artist_by_name_simple(artist_data["name"], artist_data.get("id"))
                 stmt = insert(AlbumReleaseArtistBridge).values(
                     album_release_uuid=album_release.album_release_uuid,
                     artist_uuid=artist.artist_uuid
@@ -319,7 +348,7 @@ class MusicBrainzService:
         # Add tags to the album release using the AlbumReleaseTagBridge
         for tag in data.get("tags", []):
             tag_name = self.normalize_tag_name(tag["name"])
-            tag_obj = await self.get_or_create_tag(tag_name)
+            tag_obj = await self.get_or_create_tag_simple(tag_name)
             # Check if the tag already exists in the database
             result = await self.db.execute(
                 select(AlbumReleaseTagBridge)
@@ -581,10 +610,16 @@ class MusicBrainzService:
             album_release: AlbumRelease,
             media_tracks: list[dict],
             recordings_data: list[dict],
-            artist_collection: dict,
-            tag_collection: dict,
             should_take_duration: bool = False
     ):
+        track_buffer: dict[tuple[str, int | None], Track] = {}
+        version_buffer: dict[str, TrackVersion] = {}
+        track_album_bridge_buffer: set[tuple[UUID, UUID, str]] = set()
+        version_release_bridge_buffer: set[tuple[UUID, UUID, str]] = set()
+        track_artist_bridge_buffer: set[tuple[UUID, UUID]] = set()
+        extra_artist_bridge_buffer: set[tuple[UUID, UUID]] = set()
+        version_tag_bridge_buffer: list[dict] = []
+
         recordings_by_id = {rec["recording_id"]: rec for rec in recordings_data}
         used_artists = []
         used_tags = []
@@ -612,37 +647,29 @@ class MusicBrainzService:
             recording_details = recordings_by_id.get(recording_id, {})
 
             # Track: get or create by name AND duration
-            track = existing_tracks.get((title, length))
+            track_key = (title, length)
+            track = existing_tracks.get(track_key)
+
             if not track:
-                result = await self.db.execute(
-                    select(Track).where(Track.name == title, Track.duration == length)
-                )
-                track = result.scalar_one_or_none()
+                track = track_buffer.get(track_key)
                 if not track:
-                    track = Track(track_uuid=uuid4(), name=title, duration=length if length else None)
-                    self.db.add(track)
-                existing_tracks[(title, length)] = track
+                    track = Track(track_uuid=uuid4(), name=title, duration=length)
+                    track_buffer[track_key] = track
+
+            existing_tracks[track_key] = track
 
             from sqlalchemy.dialects.postgresql import insert
             # Track ↔ Album
             bridge_key = (track.track_uuid, album.album_uuid)
             if bridge_key not in existing_bridges:
-                stmt = insert(TrackAlbumBridge).values(
-                    track_uuid=track.track_uuid,
-                    album_uuid=album.album_uuid,
-                    track_number=track_number
-                ).on_conflict_do_nothing()
-
-                await self.db.execute(stmt)
+                track_album_bridge_buffer.add((track.track_uuid, album.album_uuid, track_number))
                 existing_bridges.add(bridge_key)
 
             # TrackVersion: get or create
             version = existing_versions.get(recording_id)
+
             if not version:
-                result = await self.db.execute(
-                    select(TrackVersion).where(TrackVersion.recording_id == recording_id)
-                )
-                version = result.scalar_one_or_none()
+                version = version_buffer.get(recording_id)
                 if not version:
                     version = TrackVersion(
                         track_version_uuid=uuid4(),
@@ -651,51 +678,37 @@ class MusicBrainzService:
                         duration=length if length else None,
                         quality="normal"
                     )
-                    self.db.add(version)
+                    version_buffer[recording_id] = version
+
                 existing_versions[recording_id] = version
 
             # Version ↔ AlbumRelease
             bridge_key = (version.track_version_uuid, album_release.album_release_uuid)
             if bridge_key not in existing_bridges:
-                stmt = insert(TrackVersionAlbumReleaseBridge).values(
-                    track_version_uuid=version.track_version_uuid,
-                    album_release_uuid=album_release.album_release_uuid,
-                    track_number=track_number
-                ).on_conflict_do_nothing()
+                version_release_bridge_buffer.add(
+                    (version.track_version_uuid, album_release.album_release_uuid, track_number)
+                )
 
-                await self.db.execute(stmt)
                 existing_bridges.add(bridge_key)
 
             # Track ↔ Artists (Album)
             for artist_uuid in album_artist_ids:
                 bridge_key = (track.track_uuid, artist_uuid)
                 if bridge_key not in existing_bridges:
-                    stmt = insert(TrackArtistBridge).values(
-                        track_uuid=track.track_uuid,
-                        artist_uuid=artist_uuid
-                    ).on_conflict_do_nothing()
-
-                    await self.db.execute(stmt)
+                    track_artist_bridge_buffer.add((track.track_uuid, artist_uuid))
                     existing_bridges.add(bridge_key)
 
             for credit in recording_details.get("artist-credit", []):
                 artist_data = credit.get("artist")
                 if artist_data:
-                    artist = await self.get_or_create_artist_by_name(
+                    artist = await self.get_or_create_artist_by_name_simple(
                         artist_data["name"],
-                        artist_data.get("id"),
-                        cache=artist_collection
+                        artist_data.get("id")
                     )
                     used_artists.append(artist)
                     key = (version.track_version_uuid, artist.artist_uuid)
                     if key not in existing_extra_artists:
-                        stmt = insert(TrackVersionExtraArtist).values(
-                            track_version_uuid=version.track_version_uuid,
-                            artist_uuid=artist.artist_uuid,
-                            role=None
-                        ).on_conflict_do_nothing()
-
-                        await self.db.execute(stmt)
+                        extra_artist_bridge_buffer.add((version.track_version_uuid, artist.artist_uuid))
                         existing_extra_artists.add(key)
 
             from sqlalchemy.dialects.postgresql import insert
@@ -703,21 +716,60 @@ class MusicBrainzService:
             # Tags (normalize tag name)
             for tag in recording_details.get("tags", []):
                 tag_name = self.normalize_tag_name(tag["name"])
-                tag_obj = await self.get_or_create_tag(tag_name, tag_collection)
+                tag_obj = await self.get_or_create_tag_simple(tag_name)
                 used_tags.append(tag_obj)
                 key = (version.track_version_uuid, tag_obj.tag_uuid)
 
                 if key not in existing_tags:
-                    stmt = insert(TrackVersionTagBridge).values(
-                        track_version_uuid=version.track_version_uuid,
-                        tag_uuid=tag_obj.tag_uuid,
-                        count=tag.get("count", 0)
-                    ).on_conflict_do_nothing()
-
-                    await self.db.execute(stmt)
+                    version_tag_bridge_buffer.append({
+                        "track_version_uuid": version.track_version_uuid,
+                        "tag_uuid": tag_obj.tag_uuid,
+                        "count": tag.get("count", 0),
+                        "created_at": datetime.utcnow(),
+                    })
                     existing_tags.add(key)
+        if track_buffer:
+            self.db.add_all(track_buffer.values())
+            await self.db.flush()
+        for track_uuid, album_uuid, track_number in track_album_bridge_buffer:
+            stmt = insert(TrackAlbumBridge).values(
+                track_uuid=track_uuid,
+                album_uuid=album_uuid,
+                track_number=track_number
+            ).on_conflict_do_nothing()
+            await self.db.execute(stmt)
+        for track_uuid, artist_uuid in track_artist_bridge_buffer:
+            stmt = insert(TrackArtistBridge).values(
+                track_uuid=track_uuid,
+                artist_uuid=artist_uuid
+            ).on_conflict_do_nothing()
+            await self.db.execute(stmt)
 
-        return used_artists, used_tags
+        if version_buffer:
+            self.db.add_all(version_buffer.values())
+            await self.db.flush()
+
+        for row in version_tag_bridge_buffer:
+            stmt = insert(TrackVersionTagBridge).values(**row).on_conflict_do_nothing()
+            await self.db.execute(stmt)
+
+        for version_uuid, album_release_uuid, track_number in version_release_bridge_buffer:
+            stmt = insert(TrackVersionAlbumReleaseBridge).values(
+                track_version_uuid=version_uuid,
+                album_release_uuid=album_release_uuid,
+                track_number=track_number
+            ).on_conflict_do_nothing()
+            await self.db.execute(stmt)
+
+        for version_uuid, artist_uuid in extra_artist_bridge_buffer:
+            stmt = insert(TrackVersionExtraArtist).values(
+                track_version_uuid=version_uuid,
+                artist_uuid=artist_uuid,
+                role=None
+            ).on_conflict_do_nothing()
+            await self.db.execute(stmt)
+
+        return used_artists, []
 
     # Get or create album from release
     async def get_or_create_album_from_musicbrainz_release(self, musicbrainz_release_id: str, discogs_release_id: int = None, should_take_duration:bool=False) -> Tuple[Album, AlbumRelease]:
