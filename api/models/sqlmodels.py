@@ -2,6 +2,7 @@ from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy import func
 from typing import Optional, List
 from datetime import datetime, UTC,  timezone
+from sqlalchemy import BigInteger, Column
 
 from uuid import UUID, uuid4
 from datetime import datetime
@@ -253,7 +254,11 @@ class AlbumRelease(SQLModel, table=True):
     album: Optional["Album"] = Relationship(back_populates="releases")
     title: str
     is_main_release: bool = False
-    discogs_release_id: Optional[int]  # maybe a release doesn't have to exist on Discogs? - bootlegs?
+    discogs_release_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(BigInteger),
+        description="Discogs release ID as bigint — may be missing for bootlegs, etc."
+    )
     musicbrainz_release_id: Optional[str] = Field(default=None, index=True)  # NEW
     country: Optional[str]
     release_date: Optional[datetime]
