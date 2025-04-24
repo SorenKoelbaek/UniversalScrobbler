@@ -5,7 +5,7 @@ from pydantic import BaseModel, TypeAdapter
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge, TrackVersion, TrackVersionTagBridge, \
-    ArtistTagBridge
+    ArtistTagBridge, TrackAlbumBridge
 from models.appmodels import AlbumRead, ArtistRead, TrackRead, TagBase
 from uuid import UUID
 from fastapi import HTTPException
@@ -45,7 +45,14 @@ class MusicService:
         )
         tag_counts = dict(tag_counts_result.all())
 
-        # Build the AlbumRead model and inject the tag counts
+        # Fetch track_number per track in the album
+        track_numbers_result = await self.db.execute(
+            select(TrackAlbumBridge.track_uuid, TrackAlbumBridge.track_number)
+            .where(TrackAlbumBridge.album_uuid == album_uuid)
+        )
+        track_number_map = dict(track_numbers_result.all())
+
+        # Build AlbumRead with tag counts and track_number injected
         album_read = AlbumRead.model_validate(album)
         album_read.tags = [
             TagBase(
@@ -55,6 +62,8 @@ class MusicService:
             )
             for tag in album.tags
         ]
+        for track in album_read.tracks:
+            track.track_number = track_number_map.get(track.track_uuid)
 
         return album_read
 

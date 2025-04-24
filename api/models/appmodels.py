@@ -90,6 +90,7 @@ class DiscogsAuthRequest(BaseModel):
 class TrackBase(BaseModel):
     track_uuid: UUID
     name: str
+    track_number: Optional[str] = None
 
     class Config:
         from_attributes=True

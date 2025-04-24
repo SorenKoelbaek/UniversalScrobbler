@@ -106,23 +106,51 @@ const AlbumDetail = () => {
           <Divider />
 
           <Box mt={3}>
-            <Typography variant="h6" gutterBottom>
-              Tracklist
-            </Typography>
-           {album.tracks.map((track, i) => (
-            <Typography key={track.track_uuid} variant="body2">
-              {i + 1}.{" "}
-              <Button
-                component={Link}
-                to={`/track/${track.track_uuid}`}
-                sx={{ padding: 0, minWidth: 0, textTransform: "none" }}
-              >
-                {track.name}
-              </Button>
-            </Typography>
-          ))}
-
+          <Typography variant="h6" gutterBottom>
+            Tracklist
+          </Typography>
+          <Box sx={{ pl: 2 }}>
+            {Object.entries(
+              album.tracks.reduce((groups, track) => {
+                const trackNum = track.track_number || "Unnumbered";
+                if (!groups[trackNum]) {
+                  groups[trackNum] = [];
+                }
+                groups[trackNum].push(track);
+                return groups;
+              }, {})
+            )
+              .sort(([a], [b]) => {
+                const aNum = parseInt(a, 10);
+                const bNum = parseInt(b, 10);
+                if (!isNaN(aNum) && !isNaN(bNum)) return aNum - bNum;
+                if (!isNaN(aNum)) return -1;
+                if (!isNaN(bNum)) return 1;
+                return 0;
+              })
+              .map(([trackNum, tracks]) => (
+                <Box key={trackNum} sx={{ mb: 2 }}>
+                  <Typography variant="body1" sx={{ fontWeight: "bold" }}>
+                    {trackNum !== "Unnumbered" ? `Track ${trackNum}` : "Unnumbered Tracks"}
+                  </Typography>
+                  <Box sx={{ pl: 2 }}>
+                    {tracks.map((track, idx) => (
+                      <Typography key={track.track_uuid} variant="body2" sx={{ mb: 1 }}>
+                        <Button
+                          component={Link}
+                          to={`/track/${track.track_uuid}`}
+                          sx={{ padding: 0, minWidth: 0, textTransform: "none" }}
+                        >
+                          {track.track_number ? `${track.track_number}. ${track.name}` : `${idx + 1}. ${track.name}`}
+                        </Button>
+                      </Typography>
+                    ))}
+                  </Box>
+                </Box>
+              ))}
           </Box>
+        </Box>
+
 
           <Divider sx={{ my: 3 }} />
 
