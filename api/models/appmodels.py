@@ -103,6 +103,19 @@ class ArtistBase(BaseModel):
     class Config:
         from_attributes=True
 
+class AlbumTypeBase(BaseModel):
+    album_type_uuid: UUID
+    name: str
+
+    class Config:
+        from_attributes=True
+
+class AlbumTypeRead(AlbumTypeBase):
+    description: Optional[str] = None
+
+    class Config:
+        from_attributes=True
+
 class AlbumBase(BaseModel):
     image_url: Optional[str] = None
     image_thumbnail_url: Optional[str] = None
@@ -110,6 +123,7 @@ class AlbumBase(BaseModel):
     title: str
     discogs_master_id: Optional[int] = None  # Master ID for the album
     release_date: Optional[datetime] = None
+    types: List[AlbumTypeBase] = []  # List of types (e.g., LP, EP, etc.)
 
     class Config:
         from_attributes=True
@@ -121,7 +135,8 @@ class AlbumSimpleRead(AlbumBase):
 # New Model to represent Album Releases (specific versions of an album)
 class AlbumReleaseBase(BaseModel):
     album_release_uuid: UUID
-    discogs_release_id: int
+    title: str
+    discogs_release_id: Optional[int] = None
     release_date: Optional[datetime] = None  # The release date for this specific version
     country: Optional[str] = None  # The country of release
     is_main_release: bool = False  # Is this the main release for the album (usually for master album)
@@ -129,9 +144,19 @@ class AlbumReleaseBase(BaseModel):
     class Config:
         from_attributes=True
 
+class TrackVersionBase(BaseModel):
+    track_version_uuid: UUID
+    album_releases: Optional[List[AlbumReleaseBase]] = []  # The album release this version belongs to
+    duration: Optional[int] = None  # Duration of the track in seconds
+    tags: List["TagBase"] = []  # List of tags associated with this track version
+
+    class Config:
+        from_attributes=True
+
 class TrackRead(TrackBase):
     albums: List[AlbumBase]
     artists: List[ArtistBase]
+    track_versions: List[TrackVersionBase]
     class Config:
         from_attributes=True
 
@@ -142,7 +167,7 @@ class ArtistRead(ArtistBase):
     profile: Optional[str] = None
     albums: Optional[List[AlbumBase]] = []  # List of albums (master) the artist is featured on
     album_releases: Optional[List[AlbumReleaseBase]] = []  # List of album releases the artist is featured on
-
+    tags: List["TagBase"] = []
     class Config:
         from_attributes=True
 
@@ -155,7 +180,7 @@ class AlbumSimple(AlbumBase):
 class TagBase(BaseModel):
     tag_uuid: UUID
     name: str
-    count: Optional[int] = 0  # Number of times this tag is used
+    count: Optional[int] = 0
 
     class Config:
         from_attributes=True
@@ -185,11 +210,10 @@ class AlbumReleaseFlat(BaseModel):
     release_date: Optional[datetime] = Field(..., alias=AliasPath("album", "release_date"))
     image_url: Optional[str] = Field(..., alias=AliasPath("album", "image_url"))
     image_thumbnail_url: Optional[str] = Field(..., alias=AliasPath("album", "image_thumbnail_url"))
+    artists: List[ArtistBase] = Field(..., alias=AliasPath("album", "artists"))
+
     class Config:
         from_attributes=True
-    artists: List[ArtistBase] = Field(..., alias=AliasPath("album", "artists"))
-    class Config:
-        from_attributes = True
 
 # AlbumReleaseRead reflects a specific release of an album
 class AlbumReleaseRead(AlbumReleaseBase):

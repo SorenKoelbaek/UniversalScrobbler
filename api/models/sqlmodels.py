@@ -73,6 +73,22 @@ class AlbumGenreBridge(SQLModel, table=True):
     genre_uuid: UUID = Field(foreign_key="genre.genre_uuid", primary_key=True)
     count: int = 0
 
+class AlbumTypeBridge(SQLModel, table=True):
+    album_uuid: UUID = Field(foreign_key="album.album_uuid", primary_key=True)
+    album_type_uuid: UUID = Field(foreign_key="album_type.album_type_uuid", primary_key=True)
+    primary: bool = Field(default=False)
+
+class AlbumType(SQLModel, table=True):
+    __tablename__ = "album_type"
+    album_type_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
+    name: str
+    description: Optional[str]
+    albums: List["Album"] = Relationship(back_populates="types", link_model=AlbumTypeBridge)
+    created_at: datetime = Field(
+        default_factory=now_utc_naive,
+        sa_column_kwargs={"server_default": func.now()}
+    )
+
 class AlbumReleaseTagBridge(SQLModel, table=True):
     __tablename__ = "album_release_tag_bridge"
 
@@ -236,7 +252,7 @@ class Album(SQLModel, table=True):
                                          link_model=TrackAlbumBridge)  # Use TrackAlbumBridge to link tracks to this album
     tags: List["Tag"] = Relationship(back_populates="albums", link_model=AlbumTagBridge)
     genres: List["Genre"] = Relationship(back_populates="albums", link_model=AlbumGenreBridge)
-
+    types: List["AlbumType"] = Relationship(back_populates="albums", link_model=AlbumTypeBridge)
     artists: List["Artist"] = Relationship(back_populates="albums", link_model=AlbumArtistBridge)
     releases: List["AlbumRelease"] = Relationship(back_populates="album")
     image_url: Optional[str]

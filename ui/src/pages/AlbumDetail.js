@@ -12,8 +12,9 @@ import {
   Chip,
   Divider,
   CircularProgress,
+  Button,
 } from "@mui/material";
-import { useParams } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import apiClient from "../utils/apiClient";
 import TagBubbleChart from "../components/TagBubbleChart";
 
@@ -54,7 +55,6 @@ const AlbumDetail = () => {
     );
   }
 
-  const artistNames = album.artists.map((a) => a.name).join(", ");
   const formattedReleaseDate = album.release_date
     ? new Date(album.release_date).toLocaleDateString()
     : "—";
@@ -73,7 +73,20 @@ const AlbumDetail = () => {
             />
             <CardContent>
               <Typography variant="h6">{album.title}</Typography>
-              <Typography variant="subtitle2">{artistNames}</Typography>
+              <Typography variant="subtitle2">
+                {album.artists.map((artist, index) => (
+                  <React.Fragment key={artist.artist_uuid}>
+                    <Button
+                      component={Link}
+                      to={`/artist/${artist.artist_uuid}`}
+                      sx={{ padding: 0, minWidth: 0, textTransform: "none" }}
+                    >
+                      {artist.name}
+                    </Button>
+                    {index < album.artists.length - 1 && ", "}
+                  </React.Fragment>
+                ))}
+              </Typography>
               <Typography variant="body2" color="text.secondary">
                 Released: {formattedReleaseDate}
               </Typography>
@@ -96,11 +109,19 @@ const AlbumDetail = () => {
             <Typography variant="h6" gutterBottom>
               Tracklist
             </Typography>
-            {album.tracks.map((track, i) => (
-              <Typography key={track.track_uuid} variant="body2">
-                {i + 1}. {track.name}
-              </Typography>
-            ))}
+           {album.tracks.map((track, i) => (
+            <Typography key={track.track_uuid} variant="body2">
+              {i + 1}.{" "}
+              <Button
+                component={Link}
+                to={`/track/${track.track_uuid}`}
+                sx={{ padding: 0, minWidth: 0, textTransform: "none" }}
+              >
+                {track.name}
+              </Button>
+            </Typography>
+          ))}
+
           </Box>
 
           <Divider sx={{ my: 3 }} />

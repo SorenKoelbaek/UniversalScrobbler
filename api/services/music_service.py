@@ -1,8 +1,11 @@
+from collections import defaultdict
+
 from sqlmodel import select, or_
 from pydantic import BaseModel, TypeAdapter
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge
+from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge, TrackVersion, TrackVersionTagBridge, \
+    ArtistTagBridge
 from models.appmodels import AlbumRead, ArtistRead, TrackRead, TagBase
 from uuid import UUID
 from fastapi import HTTPException
@@ -30,6 +33,7 @@ class MusicService:
                                                 selectinload(Album.tracks)
                                                 ,selectinload(Album.tags)
                                                 ,selectinload(Album.genres)
+                                                ,selectinload(Album.types)
                                                 ,selectinload(Album.releases)))
         album = result.scalar_one_or_none()
         if not album:
@@ -71,12 +75,42 @@ class MusicService:
         return album_list_adapter.validate_python(albums)
 
     async def get_artist(self, artist_uuid: UUID) -> ArtistRead:
-        """Retrieve a single artist based on UUID."""
-        result = await self.db.execute(select(Artist).where(Artist.artist_uuid == artist_uuid).options(selectinload(Artist.albums), selectinload(Artist.album_releases)))
+        result = await self.db.execute(
+            select(Artist)
+            .where(Artist.artist_uuid == artist_uuid)
+            .options(
+                selectinload(Artist.albums).selectinload(Album.tracks),
+                selectinload(Artist.albums).selectinload(Album.types),
+                selectinload(Artist.tags),
+                selectinload(Artist.album_releases)
+            )
+        )
         artist = result.scalar_one_or_none()
         if not artist:
             raise HTTPException(status_code=404, detail="Artist not found")
-        return ArtistRead.model_validate(artist)  # Use model_validate instead of parse_obj
+
+        # Filter albums that have at least one track
+        artist.albums = [album for album in artist.albums if album.tracks]
+
+        # Get tag counts from bridge
+        tag_counts_result = await self.db.execute(
+            select(ArtistTagBridge.tag_uuid, ArtistTagBridge.count)
+            .where(ArtistTagBridge.artist_uuid == artist_uuid)
+        )
+        tag_counts = dict(tag_counts_result.all())
+
+        # Inject counts into tag models
+        artist_read = ArtistRead.model_validate(artist)
+        artist_read.tags = [
+            TagBase(
+                tag_uuid=tag.tag_uuid,
+                name=tag.name,
+                count=tag_counts.get(tag.tag_uuid, 0)
+            )
+            for tag in artist.tags
+        ]
+
+        return artist_read
 
     async def get_all_artists(self) -> List[ArtistRead]:
         """Retrieve all artists from the database."""
@@ -89,14 +123,53 @@ class MusicService:
         return [ArtistRead.model_validate(artist) for artist in artists]  # Use model_validate instead of parse_obj
 
     async def get_track(self, track_uuid: UUID) -> TrackRead:
-        """Retrieve a single track based on UUID."""
-        result = await self.db.execute(select(Track).where(Track.track_uuid == track_uuid)
-                                       .options(
-            selectinload(Track.albums),selectinload(Track.artists)))
+        result = await self.db.execute(
+            select(Track)
+            .where(Track.track_uuid == track_uuid)
+            .options(
+                selectinload(Track.albums).selectinload(Album.types),
+                selectinload(Track.artists),
+                selectinload(Track.track_versions).selectinload(TrackVersion.tags),
+                selectinload(Track.track_versions).selectinload(TrackVersion.genres),
+                selectinload(Track.track_versions).selectinload(TrackVersion.album_releases),
+            )
+        )
         track = result.scalar_one_or_none()
         if not track:
             raise HTTPException(status_code=404, detail="Track not found")
-        return TrackRead.model_validate(track)  # Use model_validate instead of parse_obj
+
+        # Fetch tag counts from the bridge
+        version_uuids = [v.track_version_uuid for v in track.track_versions]
+        tag_counts_result = await self.db.execute(
+            select(
+                TrackVersionTagBridge.track_version_uuid,
+                TrackVersionTagBridge.tag_uuid,
+                TrackVersionTagBridge.count,
+            ).where(
+                TrackVersionTagBridge.track_version_uuid.in_(version_uuids)
+            )
+        )
+
+        # Map tag counts per version
+        version_tag_counts = defaultdict(dict)
+        for version_uuid, tag_uuid, count in tag_counts_result.all():
+            version_tag_counts[version_uuid][tag_uuid] = count
+
+        # Convert ORM to Pydantic
+        track_read = TrackRead.model_validate(track)
+
+        # Enrich tags for each version
+        for version in track_read.track_versions:
+            enriched_tags = []
+            for tag in version.tags:
+                enriched_tags.append(TagBase(
+                    tag_uuid=tag.tag_uuid,
+                    name=tag.name,
+                    count=version_tag_counts[version.track_version_uuid].get(tag.tag_uuid, 0)
+                ))
+            version.tags = enriched_tags
+
+        return track_read
 
     async def get_all_tracks(self) -> List[TrackRead]:
         """Retrieve all tracks from the database."""

@@ -21,6 +21,8 @@ import SpotifyCallback from "./pages/SpotifyCallback";
 import DiscogsCallback from "./pages/DiscogsCallback";
 import ProtectedRoute from "./auth/ProtectedRoute";
 import AlbumDetail from "./pages/AlbumDetail";
+import TrackDetail from "./pages/TrackDetail";
+import ArtistDetail from "./pages/ArtistDetail";
 
 import LiveSessionCard from "./components/LiveSessionCard"; // ✅ added
 
@@ -96,6 +98,14 @@ const App = () => {
           <Route
             path="/album/:album_uuid"
             element={<ProtectedRoute><AlbumDetail /></ProtectedRoute>}
+          />
+          <Route
+            path="/track/:track_uuid"
+            element={<ProtectedRoute><TrackDetail /></ProtectedRoute>}
+          />
+          <Route
+            path="/artist/:artist_uuid"
+            element={<ProtectedRoute><ArtistDetail /></ProtectedRoute>}
           />
           <Route
             path="/dashboard"

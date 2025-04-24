@@ -16,7 +16,9 @@ from dependencies.discogs_api import DiscogsAPI
 from models.sqlmodels import DiscogsToken, AlbumRelease
 from services.musicbrainz_service import MusicBrainzService
 from services.discogs_service import DiscogsService
-
+from config import settings
+import logging
+logger = logging.getLogger(__name__)
 
 discogs_api = DiscogsAPI()
 
@@ -126,12 +128,11 @@ class CollectionService:
         existing_release_ids = {r.discogs_release_id for r in collection.album_releases}
 
         new_releases = [r for r in collection_to_process if r["discogs_release_id"] not in existing_release_ids]
-        print(f"Found {len(new_releases)} new releases to process")
+        logger.info(f"Found {len(new_releases)} new releases to process")
         for index, release_info in enumerate(new_releases):
 
-            await asyncio.sleep(1)
             discogs_release_id = release_info["discogs_release_id"]
-            print(f"Processing {index + 1}/{len(new_releases)}: Discogs ID {discogs_release_id}")
+            logger.info(f"Processing {index + 1}/{len(new_releases)}: Discogs ID {discogs_release_id}")
             try:
                 result = await session.exec(
                     select(AlbumRelease).where(AlbumRelease.discogs_release_id == discogs_release_id)
@@ -146,6 +147,7 @@ class CollectionService:
                     await session.commit()
                     continue
 
+                await asyncio.sleep(1)
                 musicbrainz_release_id = await musicbrainz_api.get_release_by_discogs_url(discogs_release_id)
                 if musicbrainz_release_id:
                     album, albumrelease = await musicbrainz_service.get_or_create_album_from_musicbrainz_release(
