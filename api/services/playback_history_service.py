@@ -147,7 +147,9 @@ class PlaybackHistoryService:
             device_id=update.device.device_id,
             device_name=update.device.device_name)
         if read_tracks and device:
+
             read_track = read_tracks[0]
+            logger.info(f"📜 Read track: {read_track.track_uuid} full: {read_track}")
             current_playing = await self.get_currently_playing(user)
 
 
