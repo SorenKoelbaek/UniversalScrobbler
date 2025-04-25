@@ -13,17 +13,18 @@ class DeviceService:
         self.db = db
 
     async def get_or_create_device(self, user: User, device_id: str, device_name: str, ) -> Device:
-        result = await self.db.execute(select(Device).where(
+        async with self.db.no_autoflush:
+            result = await self.db.execute(select(Device).where(
             Device.user_uuid == user.user_uuid,
             Device.device_id == device_id))
-        device = result.scalar_one_or_none()
-        if not device:
-            device = Device(
-                user_uuid=user.user_uuid,
-                device_id=device_id,
-                device_name=device_name,
-            )
-            self.db.add(device)
-            await self.db.flush()  # only persist this new device
-            await self.db.refresh(device)
+            device = result.scalar_one_or_none()
+            if not device:
+                device = Device(
+                    user_uuid=user.user_uuid,
+                    device_id=device_id,
+                    device_name=device_name,
+                )
+                self.db.add(device)
+                await self.db.flush()  # only persist this new device
+                await self.db.refresh(device)
         return device
