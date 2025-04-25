@@ -12,7 +12,6 @@ class DeviceService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-
     async def get_or_create_device(self, user: User, device_id: str, device_name: str, ) -> Device:
         result = await self.db.execute(select(Device).where(
             Device.user_uuid == user.user_uuid,
@@ -25,6 +24,6 @@ class DeviceService:
                 device_name=device_name,
             )
             self.db.add(device)
-            await self.db.commit()
+            await self.db.flush()  # only persist this new device
             await self.db.refresh(device)
         return device
