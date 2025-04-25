@@ -35,7 +35,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str, db: AsyncSession 
 
         while True:
             data = await websocket.receive_text()
-            logger.debug(f"🔍 Backend received WS message: {data!r}")
+            logger.info(f"🔍 Backend received WS message: {data!r}")
             from models.appmodels import websocketMessage
             try:
                 message = websocketMessage.model_validate_json(data)
