@@ -13,7 +13,7 @@ class DeviceService:
         self.db = db
 
     async def get_or_create_device(self, user: User, device_id: str, device_name: str, ) -> Device:
-        async with self.db.no_autoflush:
+        with self.db.no_autoflush:
             result = await self.db.execute(select(Device).where(
             Device.user_uuid == user.user_uuid,
             Device.device_id == device_id))
