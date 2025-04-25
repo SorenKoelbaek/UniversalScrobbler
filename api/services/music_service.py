@@ -403,6 +403,7 @@ class MusicService:
 
             if not match:
                 logger.warning("Fallback fulltext query returned no match.")
+                return None
         # 2. Fetch full track with eager loads
         track_query = (
             select(Track)

@@ -5,6 +5,7 @@ from services.shared import websocket_service
 from dependencies.auth import get_current_user
 from dependencies.database import get_async_session
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import ValidationError
 from services.playback_history_service import PlaybackHistoryService
 from typing import List
 from config import settings
@@ -40,8 +41,8 @@ async def websocket_endpoint(websocket: WebSocket, token: str, db: AsyncSession 
                 message = websocketMessage.model_validate_json(data)
                 if message.type == "playback_update":
                     await playback_history_service.add_listen(user, message.payload)
-            except websocketMessage.ModelValidationError as e:
-                logger.error(e)
+            except ValidationError as e:
+                logger.error(f"WS payload failed schema validation: {e}")
 
             # Example: if the message contains the keyword "broadcast", trigger SSE broadcast
             if "broadcast" in data:
