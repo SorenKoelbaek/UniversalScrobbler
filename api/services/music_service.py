@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge, TrackVersion, TrackVersionTagBridge, \
     ArtistTagBridge, TrackAlbumBridge, AlbumArtistBridge, SearchIndex, ScrobbleResolutionIndex
-from models.appmodels import AlbumRead, ArtistRead, TrackRead, TagBase, PaginatedResponse, ArtistBase
+from models.appmodels import AlbumRead, ArtistRead, TrackRead, TagBase, PaginatedResponse, ArtistBase, TrackReadSimple
 from uuid import UUID
 from fastapi import HTTPException
 from typing import List, Optional
@@ -410,10 +410,7 @@ class MusicService:
             .where(Track.track_uuid == match.track_uuid)
             .options(
                 selectinload(Track.artists),
-                selectinload(Track.albums).selectinload(Album.types),
-                selectinload(Track.track_versions).selectinload(TrackVersion.tags),
-                selectinload(Track.track_versions).selectinload(TrackVersion.genres),
-                selectinload(Track.track_versions).selectinload(TrackVersion.album_releases),
+                selectinload(Track.albums).selectinload(Album.types)
             )
         )
         result = await self.db.execute(track_query)
@@ -435,9 +432,8 @@ class MusicService:
             # Fallback to exact match from index
             track.albums = [a for a in track.albums if a.album_uuid == match.album_uuid]
 
-        track.track_versions = []  # Optional: skip these if not used
 
-        track_list_adapter = TypeAdapter(List[TrackRead])
+        track_list_adapter = TypeAdapter(List[TrackReadSimple])
         return track_list_adapter.validate_python([track])
 
     def normalize(self, name: str) -> str:

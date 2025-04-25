@@ -156,9 +156,14 @@ class TrackVersionBase(BaseModel):
     class Config:
         from_attributes=True
 
-class TrackRead(TrackBase):
+class TrackReadSimple(TrackBase):
     albums: List[AlbumBase]
     artists: List[ArtistBase]
+
+    class Config:
+        from_attributes=True
+
+class TrackRead(TrackReadSimple):
     track_versions: List[TrackVersionBase]
     class Config:
         from_attributes=True
@@ -273,7 +278,7 @@ class CollectionRead(CollectionBase):
 
 class MusicSearchResponse(BaseModel):
     type: str
-    result: Union[List[TrackRead],List[AlbumRead],List[ArtistRead]]
+    result: Union[List[TrackReadSimple],List[AlbumRead],List[ArtistRead]]
 
 
 class PlaybackUpdateTrack(BaseModel):
