@@ -149,9 +149,6 @@ class PlaybackHistoryService:
         if read_tracks and device:
 
             read_track = read_tracks[0]
-            logger.info(f"📜 Read track: {read_track.track_uuid} full: {read_track}")
-            for obj in self.db.identity_map.values():
-                logger.warning(f"PENDING: {obj.__class__.__name__} -> {obj}")
             current_playing = await self.get_currently_playing(user)
 
 
