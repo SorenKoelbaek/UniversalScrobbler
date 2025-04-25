@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import {
   Container,
   Typography,
@@ -22,26 +22,66 @@ import AlbumCard from "../components/AlbumCard";
 import AlbumGridCard from "../components/AlbumGridCard";
 
 const Collection = () => {
-  const [collection, setCollection] = useState(null);
+  const [collection, setCollection] = useState({ items: [], total: 0 });
   const [loading, setLoading] = useState(true);
+  const [isFetchingMore, setIsFetchingMore] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [limit] = useState(100);
+  const [hasMore, setHasMore] = useState(true);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortKey, setSortKey] = useState("album_title");
   const [sortDir, setSortDir] = useState("asc");
   const [viewMode, setViewMode] = useState("table");
 
-  useEffect(() => {
-    const fetchCollection = async () => {
-      try {
-        const res = await apiClient.get("/collection/");
-        setCollection(res.data);
-      } catch (error) {
-        console.error("Failed to fetch collection:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
+  const fetchCollection = async (initial = false) => {
+    try {
+      const res = await apiClient.get("/collection/", {
+        params: {
+          offset,
+          limit,
+          search: debouncedSearch,
+        },
+      });
 
-    fetchCollection();
+      const newItems = res.data.items;
+      const total = res.data.total;
+
+      setCollection((prev) => ({
+        items: initial ? newItems : [...prev.items, ...newItems],
+        total,
+      }));
+
+      setHasMore(offset + limit < total);
+      setOffset((prev) => prev + limit);
+    } catch (error) {
+      console.error("Failed to fetch collection:", error);
+    } finally {
+      setLoading(false);
+      setIsFetchingMore(false);
+    }
+    };
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      if (search.length === 0) {
+        setDebouncedSearch(""); // clears search
+      } else if (search.length >= 3) {
+        setDebouncedSearch(search); // triggers search
+      }
+    }, 100);
+
+    return () => clearTimeout(timeout);
+  }, [search]);
+
+  useEffect(() => {
+    setOffset(0);
+    setHasMore(true);
+    setCollection({ items: [], total: 0 });
+    fetchCollection(true);  // full refresh with search term
+  }, [debouncedSearch]);
+
+  useEffect(() => {
+    fetchCollection(true);
   }, []);
 
   const handleSort = (key) => {
@@ -54,8 +94,21 @@ const Collection = () => {
   };
 
   const filteredReleases = useMemo(() => {
-    if (!collection?.album_releases) return [];
-    return collection.album_releases
+    // If using server-side search, skip client filtering
+    if (debouncedSearch.length >= 3 || debouncedSearch.length === 0) {
+      return collection.items.sort((a, b) => {
+        const valA = a[sortKey];
+        const valB = b[sortKey];
+        if (!valA) return 1;
+        if (!valB) return -1;
+        return sortDir === "asc"
+          ? valA.localeCompare(valB)
+          : valB.localeCompare(valA);
+      });
+    }
+
+    // Fallback: if in the middle of typing (1–2 characters), do local filtering
+    return collection.items
       .filter((release) => {
         const match = (str) =>
           str?.toLowerCase().includes(search.toLowerCase());
@@ -73,16 +126,31 @@ const Collection = () => {
           ? valA.localeCompare(valB)
           : valB.localeCompare(valA);
       });
-  }, [collection, search, sortKey, sortDir]);
+  }, [collection, search, sortKey, sortDir, debouncedSearch]);
+
+  // Infinite scroll
+  const observer = useRef();
+    const sentinelRef = useCallback(
+    (node) => {
+      if (isFetchingMore || loading || !hasMore) return;
+
+      if (observer.current) observer.current.disconnect();
+      observer.current = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+          setIsFetchingMore(true);
+          fetchCollection(false);
+        }
+      });
+
+      if (node) observer.current.observe(node);
+    },
+    [isFetchingMore, hasMore, loading, debouncedSearch]
+  );
+
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4 }}>
-      <Box
-        display="flex"
-        justifyContent="space-between"
-        alignItems="center"
-        mb={2}
-      >
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
         <Typography variant="h5">My Collection</Typography>
         <ToggleButtonGroup
           value={viewMode}
@@ -167,6 +235,16 @@ const Collection = () => {
             </Grid>
           ))}
         </Grid>
+      )}
+
+      {/* Sentinel for infinite scroll */}
+      <div ref={sentinelRef} style={{ height: 1 }} />
+
+      {/* Bottom loading spinner */}
+      {isFetchingMore && (
+        <Box display="flex" justifyContent="center" mt={2}>
+          <CircularProgress size={24} />
+        </Box>
       )}
     </Container>
   );

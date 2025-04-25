@@ -1,8 +1,10 @@
-from typing import Optional, List, Union
+from typing import Optional, Union
 from uuid import UUID
 from pydantic import BaseModel, EmailStr, field_serializer, field_validator, model_validator, Field, AliasPath
 from datetime import datetime, timezone
+from typing import Generic, TypeVar, List
 
+T = TypeVar("T")
 class DeviceBase(BaseModel):
     device_uuid: UUID
     device_name: str
@@ -253,6 +255,12 @@ class CollectionSimpleRead(CollectionBase):
 
     class Config:
         from_attributes = True
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    total: int
+    offset: int
+    limit: int
+    items: List[T]
 
 # CollectionRead represents a user's collection and all albums/releases in it
 class CollectionRead(CollectionBase):

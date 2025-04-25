@@ -1,5 +1,3 @@
-// src/pages/AlbumDetailPage.js
-
 import React, { useEffect, useState } from "react";
 import {
   Box,
@@ -9,29 +7,46 @@ import {
   CardContent,
   CardMedia,
   Grid,
-  Chip,
-  Divider,
   CircularProgress,
   Button,
+  Divider,
 } from "@mui/material";
 import { useParams, Link } from "react-router-dom";
 import apiClient from "../utils/apiClient";
 import TagBubbleChart from "../components/TagBubbleChart";
+import TrackList from "../components/TrackList";
+import ReleaseList from "../components/ReleaseList";
 
 const AlbumDetail = () => {
   const { album_uuid } = useParams();
   const [album, setAlbum] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  const enrichAlbumIfNeeded = async (album) => {
+    if (!album.discogs_master_id && !album.discogs_main_release_id) {
+      try {
+        const response = await apiClient.post(`/discogs/enrich/album/${album.album_uuid}`);
+        setAlbum(response.data);  // 💥 overwrite with enriched album
+      } catch (err) {
+        console.warn("Discogs enrichment failed:", err);
+      }
+    }
+  };
+
+
   useEffect(() => {
     const fetchAlbum = async () => {
       try {
         const response = await apiClient.get(`/music/albums/${album_uuid}`);
-        setAlbum(response.data);
+        const albumData = response.data;
+        setAlbum(albumData); // ✅ Set immediately so the page can render
+        console.log(albumData);
+        // 🔁 Lazy trigger enrichment after render, no blocking
+        enrichAlbumIfNeeded(albumData);
       } catch (err) {
         console.error("Failed to fetch album:", err);
       } finally {
-        setLoading(false);
+        setLoading(false); // ✅ Only reflects initial album load
       }
     };
     fetchAlbum();
@@ -90,6 +105,19 @@ const AlbumDetail = () => {
               <Typography variant="body2" color="text.secondary">
                 Released: {formattedReleaseDate}
               </Typography>
+
+              {album.discogs_master_id && (
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  <a
+                    href={`https://www.discogs.com/master/${album.discogs_master_id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: "#1976d2", textDecoration: "none" }}
+                  >
+                    View on Discogs
+                  </a>
+                </Typography>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -103,70 +131,13 @@ const AlbumDetail = () => {
             </Box>
           </Box>
 
-          <Divider />
+          <Divider sx={{ my: 3 }} />
 
-          <Box mt={3}>
-          <Typography variant="h6" gutterBottom>
-            Tracklist
-          </Typography>
-          <Box sx={{ pl: 2 }}>
-            {Object.entries(
-              album.tracks.reduce((groups, track) => {
-                const trackNum = track.track_number || "Unnumbered";
-                if (!groups[trackNum]) {
-                  groups[trackNum] = [];
-                }
-                groups[trackNum].push(track);
-                return groups;
-              }, {})
-            )
-              .sort(([a], [b]) => {
-                const aNum = parseInt(a, 10);
-                const bNum = parseInt(b, 10);
-                if (!isNaN(aNum) && !isNaN(bNum)) return aNum - bNum;
-                if (!isNaN(aNum)) return -1;
-                if (!isNaN(bNum)) return 1;
-                return 0;
-              })
-              .map(([trackNum, tracks]) => (
-                <Box key={trackNum} sx={{ mb: 2 }}>
-                  <Typography variant="body1" sx={{ fontWeight: "bold" }}>
-                    {trackNum !== "Unnumbered" ? `Track ${trackNum}` : "Unnumbered Tracks"}
-                  </Typography>
-                  <Box sx={{ pl: 2 }}>
-                    {tracks.map((track, idx) => (
-                      <Typography key={track.track_uuid} variant="body2" sx={{ mb: 1 }}>
-                        <Button
-                          component={Link}
-                          to={`/track/${track.track_uuid}`}
-                          sx={{ padding: 0, minWidth: 0, textTransform: "none" }}
-                        >
-                          {track.track_number ? `${track.track_number}. ${track.name}` : `${idx + 1}. ${track.name}`}
-                        </Button>
-                      </Typography>
-                    ))}
-                  </Box>
-                </Box>
-              ))}
-          </Box>
-        </Box>
-
+          <TrackList tracks={album.tracks} />
 
           <Divider sx={{ my: 3 }} />
 
-          <Box>
-            <Typography variant="h6" gutterBottom>
-              Releases
-            </Typography>
-            {album.releases.map((rel) => (
-              <Typography key={rel.album_release_uuid} variant="body2">
-                {rel.release_date
-                  ? new Date(rel.release_date).toLocaleDateString()
-                  : "—"}{" "}
-                ({rel.country || "Unknown"})
-              </Typography>
-            ))}
-          </Box>
+          <ReleaseList releases={album.releases} />
         </Grid>
       </Grid>
     </Container>

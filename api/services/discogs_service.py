@@ -71,6 +71,70 @@ class DiscogsService:
         self.api = api or DiscogsAPI()
         self.oauth = {}  # Preserve this for in-memory OAuth flow state
 
+    async def enrich_album_with_discogs_data(self, album: Album, user_uuid: str):
+
+        # 1. Skip if already enriched
+        if album.discogs_master_id and album.discogs_main_release_id:
+            logger.info(f"Album '{album.title}' already has Discogs metadata.")
+            return
+
+
+        # 2. Find first album_release with discogs_release_id
+        releases_result = await self.db.execute(
+            select(AlbumRelease)
+            .where(AlbumRelease.album_uuid == album.album_uuid)
+            .where(AlbumRelease.discogs_release_id.isnot(None))
+            .order_by(AlbumRelease.release_date.asc())
+        )
+        release = releases_result.scalars().first()
+        if not release:
+            logger.info(f"No Discogs-linked releases found for album '{album.title}'")
+            return
+
+        token_data = await self.get_token_for_user(user_uuid, self.db)
+        token = token_data.access_token
+        secret = token_data.access_token_secret
+
+        release_data = self.api.get_release(release.discogs_release_id, token, secret)
+        if not release_data:
+            logger.error(f"❌ Could not fetch release data for release {release.discogs_release_id}")
+            return album
+
+        master_id = release_data.get("master_id")
+        if not master_id:
+            logger.warning(f"No master_id found in Discogs release: {release.discogs_release_id}")
+            return
+
+        master_data = self.api.get_master(master_id, token, secret)
+        main_release_id = master_data.get("main_release")
+        images = master_data.get("images", [])
+        image_url = next((img["uri"] for img in images if img.get("uri")), None)
+        thumb_url = next((img["uri150"] for img in images if img.get("uri150")), None)
+
+        album.discogs_master_id = master_id
+        album.discogs_main_release_id = main_release_id
+        if image_url and "discogs" in image_url:
+            album.image_url = image_url
+
+        if thumb_url and "discogs" in thumb_url:
+            album.image_thumbnail_url = thumb_url
+
+        if album.image_thumbnail_url is None:
+            release_info = self.api.get_release(main_release_id, token, secret)
+            if release_info:
+                images = release_info.get("images", [])
+                thumb_url = next((img["uri150"] for img in images if img.get("uri150")), None)
+                if thumb_url and "discogs" in thumb_url:
+                    album.image_thumbnail_url = thumb_url
+                image_url = next((img["uri"] for img in images if img.get("uri")), None)
+                if image_url and "discogs" in image_url:
+                    album.image_url = image_url
+
+
+
+        logger.info(f"Enriched album '{album.title}' with Discogs master and image data")
+        await self.db.commit()
+
     async def authorize_user(self, oauth_token: str, oauth_verifier: str, user_uuid: str, db: AsyncSession):
         # Fetch the temporary OAuth data from DiscogsOAuthTemp table
         result = await db.execute(

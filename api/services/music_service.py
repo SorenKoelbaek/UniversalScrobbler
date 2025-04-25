@@ -1,12 +1,14 @@
 from collections import defaultdict
 
-from sqlmodel import select, or_
+from redis.commands.search import Search
+from sqlalchemy import func
+from sqlmodel import select, or_, exists
 from pydantic import BaseModel, TypeAdapter
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge, TrackVersion, TrackVersionTagBridge, \
-    ArtistTagBridge, TrackAlbumBridge
-from models.appmodels import AlbumRead, ArtistRead, TrackRead, TagBase
+    ArtistTagBridge, TrackAlbumBridge, AlbumArtistBridge, SearchIndex, ScrobbleResolutionIndex
+from models.appmodels import AlbumRead, ArtistRead, TrackRead, TagBase, PaginatedResponse, ArtistBase
 from uuid import UUID
 from fastapi import HTTPException
 from typing import List, Optional
@@ -16,9 +18,31 @@ from dependencies.musicbrainz_api import MusicBrainzAPI
 from services.musicbrainz_service import MusicBrainzService
 import re
 from rapidfuzz import fuzz
-
+from datetime import datetime
 
 musicbrainz_api = MusicBrainzAPI()
+
+
+def rank_album_preference(album, expected_title: str):
+    title = (album.title or "").lower()
+    expected = (expected_title or "").lower()
+
+    # Scoring by heuristic: higher is better
+    score = 0
+    if title == expected:
+        score += 100  # Exact match wins
+    elif expected in title:
+        score += 50  # Contains target
+
+    if album.release_date:
+        score += max(0, 100 - (album.release_date.year - 1960))  # Favor older
+
+    if any(t.name == "Remix" for t in (album.types or [])):
+        score -= 30
+    if any(t.name == "Live" for t in (album.types or [])):
+        score -= 20
+
+    return score
 
 
 class MusicService:
@@ -32,7 +56,6 @@ class MusicService:
                                        .options(selectinload(Album.artists),
                                                 selectinload(Album.tracks)
                                                 ,selectinload(Album.tags)
-                                                ,selectinload(Album.genres)
                                                 ,selectinload(Album.types)
                                                 ,selectinload(Album.releases)))
         album = result.scalar_one_or_none()
@@ -67,21 +90,95 @@ class MusicService:
 
         return album_read
 
-    async def get_all_albums(self) -> List[AlbumRead]:
-        """Retrieve all albums from the database."""
-        # Fetch albums along with their artists and tracks
-        result = await self.db.execute(
-            select(Album)
-            .options(
-                selectinload(Album.artists),
-                selectinload(Album.tracks)
-            )  # Ensure related fields are loaded
-        )
+    async def get_all_albums(
+            self,
+            offset: int = 0,
+            limit: int = 100,
+            search: Optional[str] = None,
+    ) -> PaginatedResponse[AlbumRead]:
+        """Retrieve paginated albums with optional full-text search from search_index."""
 
-        albums = result.scalars().all()
+        if search:
+            ts_query = func.plainto_tsquery("english", search)
 
-        album_list_adapter = TypeAdapter(list[AlbumRead])
-        return album_list_adapter.validate_python(albums)
+            # Step 1: Query the materialized view to get matching album UUIDs
+            index_query = (
+                select(SearchIndex.entity_uuid)
+                .where(SearchIndex.entity_type == "album")
+                .where(SearchIndex.search_vector.op("@@")(ts_query))
+                .order_by(func.ts_rank(SearchIndex.search_vector, ts_query).desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            result = await self.db.execute(index_query)
+            matching_uuids = result.scalars().all()
+
+            if not matching_uuids:
+                return PaginatedResponse(total=0, offset=offset, limit=limit, items=[])
+
+            # Step 2: Count total matches from index (for pagination)
+            count_query = (
+                select(func.count())
+                .select_from(SearchIndex)
+                .where(SearchIndex.entity_type == "album")
+                .where(SearchIndex.search_vector.op("@@")(ts_query))
+            )
+            total = (await self.db.execute(count_query)).scalar_one()
+
+            # Step 3: Fetch actual album data
+            album_query = (
+                select(Album)
+                .where(Album.album_uuid.in_(matching_uuids))
+                .options(
+                    selectinload(Album.artists),
+                    selectinload(Album.tracks),
+                    selectinload(Album.tags),
+                    selectinload(Album.types),
+                    selectinload(Album.releases),
+                )
+            )
+            album_result = await self.db.execute(album_query)
+            albums = album_result.scalars().all()
+
+            # Reorder based on the order of matching UUIDs
+            uuid_order = {uuid: idx for idx, uuid in enumerate(matching_uuids)}
+            albums.sort(key=lambda a: uuid_order.get(a.album_uuid, len(matching_uuids)))
+
+            album_list_adapter = TypeAdapter(list[AlbumRead])
+            return PaginatedResponse(
+                total=total,
+                offset=offset,
+                limit=limit,
+                items=album_list_adapter.validate_python(albums),
+            )
+
+        else:
+            # Fallback: no search, regular pagination
+            query = (
+                select(Album)
+                .options(
+                    selectinload(Album.artists),
+                    selectinload(Album.tracks),
+                    selectinload(Album.tags),
+                    selectinload(Album.types),
+                    selectinload(Album.releases),
+                )
+                .offset(offset)
+                .limit(limit)
+            )
+            result = await self.db.execute(query)
+            albums = result.scalars().all()
+
+            total_result = await self.db.execute(select(func.count()).select_from(Album))
+            total = total_result.scalar_one()
+
+            album_list_adapter = TypeAdapter(list[AlbumRead])
+            return PaginatedResponse(
+                total=total,
+                offset=offset,
+                limit=limit,
+                items=album_list_adapter.validate_python(albums),
+            )
 
     async def get_artist(self, artist_uuid: UUID) -> ArtistRead:
         result = await self.db.execute(
@@ -121,16 +218,84 @@ class MusicService:
 
         return artist_read
 
-    async def get_all_artists(self) -> List[ArtistRead]:
-        """Retrieve all artists from the database."""
-        result = await self.db.execute(select(Artist).options(selectinload(Artist.albums)))
-        artists = result.scalars().all()
+    async def get_all_artists(
+            self,
+            offset: int = 0,
+            limit: int = 100,
+            search: Optional[str] = None,
+    ) -> PaginatedResponse[ArtistBase]:
+        """Retrieve paginated artists with optional full-text search from search_index."""
 
-        artist_list_adapter = TypeAdapter(list[ArtistRead])
-        return artist_list_adapter.validate_python(artists)
+        if search:
+            ts_query = func.plainto_tsquery("english", search)
 
-        return [ArtistRead.model_validate(artist) for artist in artists]  # Use model_validate instead of parse_obj
+            # Step 1: Get matching artist UUIDs
+            index_query = (
+                select(SearchIndex.entity_uuid)
+                .where(SearchIndex.entity_type == "artist")
+                .where(SearchIndex.search_vector.op("@@")(ts_query))
+                .order_by(func.ts_rank(SearchIndex.search_vector, ts_query).desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            result = await self.db.execute(index_query)
+            matching_uuids = result.scalars().all()
 
+            if not matching_uuids:
+                return PaginatedResponse(total=0, offset=offset, limit=limit, items=[])
+
+            # Step 2: Count total matches
+            count_query = (
+                select(func.count())
+                .select_from(SearchIndex)
+                .where(SearchIndex.entity_type == "artist")
+                .where(SearchIndex.search_vector.op("@@")(ts_query))
+            )
+            total = (await self.db.execute(count_query)).scalar_one()
+
+            # Step 3: Load artist models
+            artist_query = (
+                select(Artist)
+                .where(Artist.artist_uuid.in_(matching_uuids))
+            )
+            artist_result = await self.db.execute(artist_query)
+            artists = artist_result.scalars().all()
+
+            # Reorder based on original search index ranking
+            uuid_order = {uuid: idx for idx, uuid in enumerate(matching_uuids)}
+            search_lower = search.lower()
+            artists.sort(key=lambda a: (
+                0 if a.name.lower() == search_lower else 1,
+                uuid_order.get(a.artist_uuid, len(matching_uuids))
+            ))
+            adapter = TypeAdapter(list[ArtistBase])
+            return PaginatedResponse(
+                total=total,
+                offset=offset,
+                limit=limit,
+                items=adapter.validate_python(artists),
+            )
+
+        else:
+            # No search: fallback to regular pagination
+            query = (
+                select(Artist)
+                .offset(offset)
+                .limit(limit)
+            )
+            result = await self.db.execute(query)
+            artists = result.scalars().all()
+
+            total_result = await self.db.execute(select(func.count()).select_from(Artist))
+            total = total_result.scalar_one()
+
+            adapter = TypeAdapter(list[ArtistBase])
+            return PaginatedResponse(
+                total=total,
+                offset=offset,
+                limit=limit,
+                items=adapter.validate_python(artists),
+            )
     async def get_track(self, track_uuid: UUID) -> TrackRead:
         result = await self.db.execute(
             select(Track)
@@ -195,68 +360,84 @@ class MusicService:
             track_name: Optional[str] = None,
             artist_name: Optional[str] = None,
             album_name: Optional[str] = None,
-
     ):
+        if not track_name:
+            return None
 
-        query = (
+        # 1. Full-text query based on exact terms
+        raw_query = f"{track_name or ''} {artist_name or ''} {album_name or ''}"
+        logger.info(f"Raw query: {raw_query}")
+        ts_query = func.plainto_tsquery("english", raw_query)
+
+        match_query = (
+            select(ScrobbleResolutionIndex)
+            .where(ScrobbleResolutionIndex.search_vector.op("@@")(ts_query))
+            .order_by(func.ts_rank(ScrobbleResolutionIndex.search_vector, ts_query).desc())
+            .limit(1)
+        )
+        result = await self.db.execute(match_query)
+        match = result.scalar_one_or_none()
+
+        if not match:
+            def clean_search_input(s: str) -> str:
+                import re
+                s = s.lower()
+                s = re.sub(r'\b(remaster(ed)?|remix|version|live|mono|stereo|concept)\b', '', s)
+                s = re.sub(r'\b(19|20)\d{2}\b', '', s)  # remove standalone years
+                s = re.sub(r'\s+', ' ', s)
+                return s.strip()
+
+            fallback_query = clean_search_input(raw_query)
+            logger.info(f"Cleaned query: {fallback_query}")
+            ts_query_clean = func.plainto_tsquery("english", fallback_query)
+
+            fallback_match_query = (
+                select(ScrobbleResolutionIndex)
+                .where(ScrobbleResolutionIndex.search_vector.op("@@")(ts_query_clean))
+                .order_by(func.ts_rank(ScrobbleResolutionIndex.search_vector, ts_query_clean).desc())
+                .limit(1)
+            )
+
+            result = await self.db.execute(fallback_match_query)
+            match = result.scalar_one_or_none()
+
+            if not match:
+                logger.warning("Fallback fulltext query returned no match.")
+        # 2. Fetch full track with eager loads
+        track_query = (
             select(Track)
-            .join(Track.artists)
-            .join(Track.albums)
+            .where(Track.track_uuid == match.track_uuid)
             .options(
                 selectinload(Track.artists),
-                selectinload(Track.albums)
+                selectinload(Track.albums).selectinload(Album.types),
+                selectinload(Track.track_versions).selectinload(TrackVersion.tags),
+                selectinload(Track.track_versions).selectinload(TrackVersion.genres),
+                selectinload(Track.track_versions).selectinload(TrackVersion.album_releases),
             )
         )
+        result = await self.db.execute(track_query)
+        track = result.scalar_one_or_none()
 
-        if track_name:
-            query = query.where(Track.name.ilike(f"%{track_name}%"))
-
-        if artist_name:
-            query = query.where(Artist.name.ilike(f"%{artist_name}%"))
-
-        if album_name:
-            query = query.where(Album.title.ilike(f"%{album_name}%"))
-
-        result = await self.db.execute(query)
-        tracks = result.scalars().all()
-
-        if not tracks:
-            musicbrainz_service = MusicBrainzService(self.db, musicbrainz_api)
-            release_group_id = await musicbrainz_api.search_recording_and_return_release_id(track_name, artist_name, album_name)
-            if not release_group_id:
-                release_group_id = await musicbrainz_api.search_recording_and_return_release_id(track_name, artist_name)
-            if release_group_id:
-                album, album_release = await musicbrainz_service.get_or_create_album_from_musicbrainz_release(release_group_id, True)
-                await self.db.commit()
-                query = select(Track).options(
-                    selectinload(Track.albums),
-                            selectinload(Track.artists)
-                            ).where(Track.albums.any(Album.album_uuid == album.album_uuid))
-                result = await self.db.execute(query)
-                tracks = result.scalars().all()
-                if track_name:
-                    normalized_track_name = track_name.strip().lower()
-                    matching_tracks = [
-                        t for t in tracks
-                        if t.name and self.normalize(t.name) in normalized_track_name
-                    ]
-                    # If nothing found, try fuzzy match
-                    threshold = 85  # adjust for strictness
-                    if not matching_tracks:
-                        matching_tracks = [
-                            t for t in tracks
-                            if t.name and fuzz.partial_ratio(self.normalize(t.name), normalized_track_name) >= threshold
-                        ]
-                if not matching_tracks:
-                    logger.info(f"🤷 No match for '{track_name}' in album '{album.title}'")
-                else:
-                    tracks = matching_tracks
-
-        if not tracks:
+        if not track:
             return None
-        track_list_adapter = TypeAdapter(list[TrackRead])
-        return track_list_adapter.validate_python(tracks)
 
+        # 3. Strict filter: only keep matching artist and album from the vector result
+        track.artists = [a for a in track.artists if a.artist_uuid == match.artist_uuid]
+        if album_name and track.albums:
+            sorted_albums = sorted(
+                track.albums,
+                key=lambda a: rank_album_preference(a, album_name),
+                reverse=True
+            )
+            track.albums = [sorted_albums[0]]
+        else:
+            # Fallback to exact match from index
+            track.albums = [a for a in track.albums if a.album_uuid == match.album_uuid]
+
+        track.track_versions = []  # Optional: skip these if not used
+
+        track_list_adapter = TypeAdapter(List[TrackRead])
+        return track_list_adapter.validate_python([track])
 
     def normalize(self, name: str) -> str:
         # Replace all dash variants with a plain hyphen, lowercase, strip whitespace
@@ -268,26 +449,44 @@ class MusicService:
             artist_name: Optional[str] = None,
             album_name: Optional[str] = None
     ):
-        # Start with the basic query to select tracks
-        query = select(Album).options(selectinload(Album.artists),selectinload(Album.tracks))
+        if not album_name:
+            return []
 
-        if album_name:
-            query = query.where(Album.title.ilike(f"%{album_name}%"))
-        # Apply filters if parameters are provided (add them to the query, not overwrite)
-        if artist_name:
-            query = query.where(Artist.name.ilike(f"%{artist_name}%"))
+        raw_query = f"{album_name or ''} {artist_name or ''}"
+        ts_query = func.plainto_tsquery("english", raw_query)
 
-        result = await self.db.execute(query)
-        albums = result.scalars().all()
-        if not albums:
-            musicbrainz_service = MusicBrainzService(self.db, musicbrainz_api)
-            release_id = await musicbrainz_api.get_first_release_id_by_artist_and_album(artist_name, album_name)
-            if release_id:
-                album, album_release = await musicbrainz_service.get_or_create_album_from_musicbrainz_release(release_id, True)
-                albums = [album]
-        # Optionally return a simpler response with TrackRead
-        track_list_adapter = TypeAdapter(list[AlbumRead])
-        return track_list_adapter.validate_python(albums)
+        match_query = (
+            select(ScrobbleResolutionIndex.album_uuid)
+            .where(ScrobbleResolutionIndex.search_vector.op("@@")(ts_query))
+            .order_by(func.ts_rank(ScrobbleResolutionIndex.search_vector, ts_query).desc())
+            .limit(1)
+        )
+
+        result = await self.db.execute(match_query)
+        match = result.scalar_one_or_none()
+
+        if not match:
+            return []
+
+        album_query = (
+            select(Album)
+            .where(Album.album_uuid == match)
+            .options(
+                selectinload(Album.artists),
+                selectinload(Album.tracks),
+                selectinload(Album.tags),
+                selectinload(Album.types),
+                selectinload(Album.releases),
+            )
+        )
+        result = await self.db.execute(album_query)
+        album = result.scalar_one_or_none()
+
+        if not album:
+            return []
+
+        adapter = TypeAdapter(List[AlbumRead])
+        return adapter.validate_python([album])
 
     async def search_artist(
             self,

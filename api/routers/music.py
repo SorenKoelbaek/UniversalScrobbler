@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from models.appmodels import AlbumRead, ArtistRead, TrackRead, MusicSearchResponse
+from models.appmodels import AlbumRead, ArtistRead, TrackRead, MusicSearchResponse, PaginatedResponse, ArtistBase
 from services.music_service import MusicService
 from dependencies.database import get_async_session
 from dependencies.auth import get_current_user
@@ -14,40 +14,55 @@ router = APIRouter(
 )
 
 @router.get("/albums/{album_uuid}", response_model=AlbumRead)
-async def get_album(album_uuid: UUID, db: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user)):
+async def get_album(
+    album_uuid: UUID,
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user),
+):
     """Fetch a single album."""
     music_service = MusicService(db)
     return await music_service.get_album(album_uuid)
 
-@router.get("/albums/", response_model=List[AlbumRead])
-async def get_all_albums(db: AsyncSession = Depends(get_async_session)):
-    """Fetch all albums."""
+
+@router.get("/albums/", response_model=PaginatedResponse[AlbumRead])
+async def get_all_albums(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    search: str | None = None,
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Fetch paginated albums with optional search."""
     music_service = MusicService(db)
-    return await music_service.get_all_albums()
+    return await music_service.get_all_albums(offset=offset, limit=limit, search=search)
+
 
 @router.get("/artists/{artist_uuid}", response_model=ArtistRead)
-async def get_artist(artist_uuid: UUID, db: AsyncSession = Depends(get_async_session),user: User = Depends(get_current_user)):
+async def get_artist(
+    artist_uuid: UUID,
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user),
+):
     """Fetch a single artist."""
     music_service = MusicService(db)
     return await music_service.get_artist(artist_uuid)
 
-@router.get("/artists/", response_model=List[ArtistRead])
-async def get_all_artists(db: AsyncSession = Depends(get_async_session)):
-    """Fetch all artists."""
+
+@router.get("/artists/", response_model=PaginatedResponse[ArtistBase])
+async def get_all_artists(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    search: str | None = None,
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Fetch paginated artists with optional search."""
     music_service = MusicService(db)
-    return await music_service.get_all_artists()
+    return await music_service.get_all_artists(offset=offset, limit=limit, search=search)
 
 @router.get("/tracks/{track_uuid}", response_model=TrackRead)
 async def get_track(track_uuid: UUID, db: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user)):
     """Fetch a single track."""
     music_service = MusicService(db)
     return await music_service.get_track(track_uuid)
-
-@router.get("/tracks/", response_model=List[TrackRead])
-async def get_all_tracks(db: AsyncSession = Depends(get_async_session), user: User = Depends(get_current_user)):
-    """Fetch all tracks."""
-    music_service = MusicService(db)
-    return await music_service.get_all_tracks()
 
 
 @router.get("/search/", response_model=MusicSearchResponse)

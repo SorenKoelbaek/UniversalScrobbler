@@ -99,6 +99,33 @@ class DiscogsAPI:
             logger.error(f"❌ Error during OAuth identity call: {e}")
             return None
 
+    def get_release(self, release_id: int, token: str, secret: str) -> Optional[dict]:
+        """Fetch raw release data from Discogs."""
+        url = f"{self.base_url}/releases/{release_id}"
+        headers = {
+            "User-Agent": "VinylScrobbler/1.0"
+        }
+
+        oauth = OAuth1Session(
+            client_key=settings.DISCOGS_CONSUMER_KEY,
+            client_secret=settings.DISCOGS_SECRET_KEY,
+            resource_owner_key=token,
+            resource_owner_secret=secret
+        )
+
+        try:
+            response = oauth.get(url, headers=headers)
+            response.raise_for_status()
+
+            remaining_calls = int(response.headers.get("x-discogs-ratelimit-remaining", 50))
+            self._rate_limit(remaining_calls)
+
+            return response.json()
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ Failed to fetch release {release_id}: {e}")
+            return None
+
     def get_full_release_details(self, release_id: int, token: str, secret: str) -> Optional[dict]:
         """Fetch full release details from Discogs and return the relevant data."""
         url = f"{self.base_url}/releases/{release_id}"

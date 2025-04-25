@@ -23,6 +23,7 @@ import ProtectedRoute from "./auth/ProtectedRoute";
 import AlbumDetail from "./pages/AlbumDetail";
 import TrackDetail from "./pages/TrackDetail";
 import ArtistDetail from "./pages/ArtistDetail";
+import Discover from "./pages/Discover";
 
 import LiveSessionCard from "./components/LiveSessionCard"; // ✅ added
 
@@ -114,6 +115,10 @@ const App = () => {
           <Route
             path="/profile"
             element={<ProtectedRoute><Profile /></ProtectedRoute>}
+          />
+          <Route
+            path="/discover"
+            element={<ProtectedRoute><Discover /></ProtectedRoute>}
           />
         </Routes>
       </Box>

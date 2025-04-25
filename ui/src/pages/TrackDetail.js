@@ -16,6 +16,7 @@ import {
 import { useParams, Link } from "react-router-dom";
 import apiClient from "../utils/apiClient";
 import TagBubbleChart from "../components/TagBubbleChart";
+import AlbumListTable from "../components/AlbumListTable";
 
 const TrackDetail = () => {
   const { track_uuid } = useParams();
@@ -100,31 +101,11 @@ const TrackDetail = () => {
         {/* Appears on Albums */}
         <Grid item xs={12}>
           <Typography variant="h6" gutterBottom>Appears on Albums</Typography>
-          <Grid container spacing={2}>
-            {track.albums.map((album) => (
-              <Grid item xs={6} sm={4} key={album.album_uuid}>
-                <Card
-                  component={Link}
-                  to={`/album/${album.album_uuid}`}
-                  sx={{ textDecoration: "none" }}
-                >
-                  {album.image_url && (
-                    <CardMedia
-                      component="img"
-                      height="140"
-                      image={album.image_url}
-                      alt={album.title}
-                    />
-                  )}
-                  <CardContent>
-                    <Typography variant="body2" color="text.primary">
-                      {album.title}
-                    </Typography>
-                  </CardContent>
-                </Card>
-              </Grid>
-            ))}
-          </Grid>
+          <>
+            <AlbumListTable albums={track.albums} showArtist={true} />
+          </>
+
+
         </Grid>
 
         {/* Track Versions */}

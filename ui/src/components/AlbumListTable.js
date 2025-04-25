@@ -30,7 +30,7 @@ function calculateSortValue(album) {
   }, 0);
 }
 
-const AlbumListTable = ({ albums }) => {
+const AlbumListTable = ({ albums, showArtist = false }) => {
   if (!albums || albums.length === 0) return null;
 
   // Build albums grouped by typeGroup
@@ -80,6 +80,11 @@ const AlbumListTable = ({ albums }) => {
                         <Typography variant="body1" color="primary">
                           {album.title}
                         </Typography>
+                      }
+                      secondary={
+                        showArtist && album.artists && album.artists.length > 0
+                          ? album.artists.map((a) => a.name).join(", ")
+                          : null
                       }
                     />
                     <Typography variant="body2" sx={{ minWidth: 100, textAlign: "right" }}>

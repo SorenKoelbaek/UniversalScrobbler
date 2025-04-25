@@ -1,8 +1,9 @@
-
+from sqlalchemy import func, or_, exists
 from sqlalchemy.orm import selectinload
 
-from models.sqlmodels import Collection, Album
-from models.appmodels import CollectionSimple, CollectionSimpleRead
+from models.sqlmodels import Collection, Album, CollectionAlbumReleaseBridge, Artist, AlbumRelease, \
+    AlbumReleaseArtistBridge, AlbumArtistBridge
+from models.appmodels import CollectionSimple, CollectionSimpleRead, PaginatedResponse, AlbumReleaseFlat
 from uuid import UUID
 from fastapi import HTTPException
 import csv
@@ -13,7 +14,7 @@ import asyncio
 import re
 from dependencies.musicbrainz_api import MusicBrainzAPI
 from dependencies.discogs_api import DiscogsAPI
-from models.sqlmodels import DiscogsToken, AlbumRelease
+from models.sqlmodels import DiscogsToken
 from services.musicbrainz_service import MusicBrainzService
 from services.discogs_service import DiscogsService
 from config import settings
@@ -51,18 +52,75 @@ class CollectionService:
             raise HTTPException(status_code=404, detail="Album not found")
         return CollectionSimpleRead.model_validate(collection)  # Use model_validate instead of parse_obj
 
-    async def get_primary_collection(self, user_uuid: UUID) -> CollectionSimpleRead:
-        result = await self.db.execute(select(Collection).where(Collection.user_uuid == user_uuid)
-        .options(
-            selectinload(Collection.albums).selectinload(Album.artists),  # Eager load albums and their artists
-            selectinload(Collection.albums).selectinload(Album.tracks),  # Eager load albums and their tracks
-            selectinload(Collection.album_releases).selectinload(AlbumRelease.artists)
-            # Eager load album releases and their artists
-        ))
+    async def get_primary_collection(
+        self,
+        user_uuid: UUID,
+        offset: int = 0,
+        limit: int = 100,
+        search: str | None = None,
+    ) -> PaginatedResponse[AlbumReleaseFlat]:
+        # Fetch the user's collection
+        result = await self.db.execute(
+            select(Collection).where(Collection.user_uuid == user_uuid)
+        )
         collection = result.scalar_one_or_none()
         if not collection:
-            raise HTTPException(status_code=404, detail="Album not found")
-        return CollectionSimpleRead.model_validate(collection)  # Use model_validate instead of parse_obj
+            raise HTTPException(status_code=404, detail="Collection not found")
+
+        base_query = (
+            select(AlbumRelease)
+            .join(CollectionAlbumReleaseBridge,
+                  CollectionAlbumReleaseBridge.album_release_uuid == AlbumRelease.album_release_uuid)
+            .join(Album, Album.album_uuid == AlbumRelease.album_uuid)  # 🔥 joining Album now
+            .where(CollectionAlbumReleaseBridge.collection_uuid == collection.collection_uuid)
+        )
+
+        if search:
+            search_term = f"%{search.lower()}%"
+
+            artist_match = exists(
+                select(1)
+                .select_from(AlbumArtistBridge)  # your actual join table model
+                .join(Artist, AlbumArtistBridge.artist_uuid == Artist.artist_uuid)
+                .where(AlbumArtistBridge.album_uuid == Album.album_uuid)
+                .where(func.lower(Artist.name).ilike(search_term))
+            )
+
+            title_match = func.lower(Album.title).ilike(search_term)
+
+            base_query = base_query.where(or_(title_match, artist_match))
+
+        # Total count (distinct)
+        total_query = base_query.with_only_columns(
+            func.count(func.distinct(AlbumRelease.album_release_uuid))
+        )
+        total_result = await self.db.execute(total_query)
+        total = total_result.scalar_one()
+
+        matching_ids_query = base_query.with_only_columns(AlbumRelease.album_release_uuid).distinct()
+        ids_result = await self.db.execute(matching_ids_query)
+
+        # Apply pagination and eager loading
+        releases_query = (
+            base_query
+            .distinct(AlbumRelease.album_release_uuid)
+            .offset(offset)
+            .limit(limit)
+            .options(
+                selectinload(AlbumRelease.album).selectinload(Album.artists),
+                selectinload(AlbumRelease.artists),
+            )
+        )
+
+        releases_result = await self.db.execute(releases_query)
+        album_releases = releases_result.scalars().all()
+
+        return PaginatedResponse[AlbumReleaseFlat](
+            total=total,
+            offset=offset,
+            limit=limit,
+            items=[AlbumReleaseFlat.model_validate(r) for r in album_releases],
+        )
 
     async def get_collection_simple(self, collection_id: UUID) -> CollectionSimple:
         """Retrieve a single album based on UUID."""

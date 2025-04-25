@@ -2,10 +2,11 @@ from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy import func
 from typing import Optional, List
 from datetime import datetime, UTC,  timezone
-from sqlalchemy import BigInteger, Column
+from sqlalchemy import BigInteger, Column, String
 
 from uuid import UUID, uuid4
 from datetime import datetime
+from sqlalchemy.dialects.postgresql import TSVECTOR
 
 
 def now_utc_naive():
@@ -21,6 +22,31 @@ class RefreshToken(SQLModel, table=True):
         sa_column_kwargs={"server_default": func.now()}
     )
     revoked: bool = Field(default=False)
+
+
+class SearchIndex(SQLModel, table=True):
+    __tablename__ = "search_index"
+    __table_args__ = {"info": {"skip_autogenerate": True}}
+
+    entity_uuid: UUID = Field(primary_key=True)
+    entity_type: str = Field(sa_column=Column("entity_type", String, nullable=False))
+    display_title: str
+    search_vector: Optional[str] = Field(
+        sa_column=Column("search_vector", TSVECTOR)
+    )
+
+class ScrobbleResolutionIndex(SQLModel, table=True):
+    __tablename__ = "scrobble_resolution_index"
+    __table_args__ = {"info": {"skip_autogenerate": True}}
+
+    track_uuid: UUID = Field( primary_key=True)
+    track_name: str
+    artist_uuid: UUID
+    artist_name: str
+    album_uuid: UUID
+    album_title: str
+    search_vector: str = Field(sa_column=Column(TSVECTOR), repr=False)
+
 
 class User(SQLModel, table=True):
     """SQL representation of a user."""
