@@ -12,6 +12,8 @@ from passlib.context import CryptContext
 import uuid
 from sqlalchemy.orm import selectinload
 
+from services.spotify_service import SpotifyService
+
 # Password hashing context
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -51,6 +53,7 @@ async def get_current_user_ws(websocket: WebSocket) -> User:
             await websocket.close(code=4403)
             return
 
+
         return user
 
 
@@ -72,7 +75,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     user = result.first()
     if user is None:
         raise credentials_exception
-
+    # update spotify token if needed:
+    if user.spotify_token and user.spotify_token.expires_at <= datetime.utcnow() + timedelta(minutes=5):
+        # Refresh the token here if needed
+        spotify_service = SpotifyService()
+        await spotify_service.get_token_for_user(user_uuid, db)
+        await db.refresh(user, ["spotify_token"])  # reload the updated token relationship
     return user
 
 
