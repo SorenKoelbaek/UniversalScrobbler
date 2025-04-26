@@ -35,6 +35,21 @@ class SearchIndex(SQLModel, table=True):
         sa_column=Column("search_vector", TSVECTOR)
     )
 
+class ScrobbleResolutionSearchIndex(SQLModel, table=True):
+    __tablename__ = "scrobble_resolution_search_index"
+    __table_args__ = {"info": {"skip_autogenerate": True}}
+
+    track_uuid: UUID = Field(primary_key=True)
+    track_name: str
+    artist_uuid: UUID
+    artist_name: str
+    album_uuid: UUID
+    album_title: str
+
+    track_name_vector: str = Field(sa_column=Column(TSVECTOR), repr=False)
+    artist_name_vector: str = Field(sa_column=Column(TSVECTOR), repr=False)
+    album_title_vector: str = Field(sa_column=Column(TSVECTOR), repr=False)
+
 class ScrobbleResolutionIndex(SQLModel, table=True):
     __tablename__ = "scrobble_resolution_index"
     __table_args__ = {"info": {"skip_autogenerate": True}}

@@ -1,5 +1,5 @@
 from collections import defaultdict
-
+from sqlalchemy import text
 from redis.commands.search import Search
 from sqlalchemy import func
 from sqlmodel import select, or_, exists
@@ -7,7 +7,8 @@ from pydantic import BaseModel, TypeAdapter
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge, TrackVersion, TrackVersionTagBridge, \
-    ArtistTagBridge, TrackAlbumBridge, AlbumArtistBridge, SearchIndex, ScrobbleResolutionIndex
+    ArtistTagBridge, TrackAlbumBridge, AlbumArtistBridge, SearchIndex, ScrobbleResolutionIndex, \
+    ScrobbleResolutionSearchIndex
 from models.appmodels import AlbumRead, ArtistRead, TrackRead, TagBase, PaginatedResponse, ArtistBase, TrackReadSimple
 from uuid import UUID
 from fastapi import HTTPException
@@ -357,112 +358,115 @@ class MusicService:
     async def search_track(
             self,
             user_uuid: UUID,
-            track_name: Optional[str] = None,
+            track_name: str,
             artist_name: Optional[str] = None,
             album_name: Optional[str] = None,
-            prefer_album_uuid: Optional[UUID] = None,
-    ):
-        if not track_name:
-            return None
+            limit: int = 5,
+    ) -> List[TrackReadSimple]:
+        # Build tsquery objects
+        track_query = func.websearch_to_tsquery('simple', track_name)
+        artist_query = func.websearch_to_tsquery('simple', artist_name) if artist_name else None
+        album_query = func.websearch_to_tsquery('simple', album_name) if album_name else None
 
-        raw_query = f"{track_name or ''} {artist_name or ''} {album_name or ''}"
-        logger.info(f"Raw query: {raw_query}")
-        ts_query = func.plainto_tsquery("english", raw_query)
-
-        match_query = (
-            select(ScrobbleResolutionIndex)
-            .where(ScrobbleResolutionIndex.search_vector.op("@@")(ts_query))
-            .order_by(func.ts_rank(ScrobbleResolutionIndex.search_vector, ts_query).desc())
-            .limit(1)
+        # Define weighted score
+        weighted_rank = (
+                1.0 * func.ts_rank(ScrobbleResolutionSearchIndex.track_name_vector, track_query) +
+                (0.8 * func.ts_rank(ScrobbleResolutionSearchIndex.artist_name_vector,
+                                    artist_query) if artist_name else 0) +
+                (0.6 * func.ts_rank(ScrobbleResolutionSearchIndex.album_title_vector, album_query) if album_name else 0)
         )
-        result = await self.db.execute(match_query)
-        match = result.scalar_one_or_none()
 
-        if not match:
-            def clean_search_input(s: str) -> str:
-                import re
-                s = s.lower()
-                s = re.sub(r'\b(remaster(ed)?|remix|deluxe|expanded|anniversary|special|edition|mono|stereo|live|version|explicit)\b', '', s)
-                s = re.sub(r'\(.*?\)', '', s)  # remove anything inside parentheses
-                s = re.sub(r'\b(19|20)\d{2}\b', '', s)  # remove standalone years
-                s = re.sub(r'\s+', ' ', s)
-                return s.strip()
+        # Build search attempts
+        search_attempts = []
 
-            fallback_query = clean_search_input(raw_query)
-            logger.info(f"Cleaned query: {fallback_query}")
-            ts_query_clean = func.plainto_tsquery("english", fallback_query)
-
-            fallback_match_query = (
-                select(ScrobbleResolutionIndex)
-                .where(ScrobbleResolutionIndex.search_vector.op("@@")(ts_query_clean))
-                .order_by(func.ts_rank(ScrobbleResolutionIndex.search_vector, ts_query_clean).desc())
-                .limit(1)
-            )
-            result = await self.db.execute(fallback_match_query)
-            match = result.scalar_one_or_none()
-
-            if not match:
-                logger.warning("Fallback fulltext query returned no match.")
-                # FINAL STAGE RESCUE: try finding just by track and artist name
-                rescue_query = f"{track_name or ''} {artist_name or ''}"
-                ts_query_rescue = func.plainto_tsquery("english", rescue_query)
-                logger.info(f"Rescue query: {rescue_query}")
-
-                rescue_match_query = (
-                    select(ScrobbleResolutionIndex)
-                    .where(ScrobbleResolutionIndex.search_vector.op("@@")(ts_query_rescue))
-                    .order_by(func.ts_rank(ScrobbleResolutionIndex.search_vector, ts_query_rescue).desc())
-                    .limit(1)
+        # Strict: track + artist + album
+        if artist_name and album_name:
+            search_attempts.append(
+                select(
+                    ScrobbleResolutionSearchIndex.track_uuid,
+                    weighted_rank.label("score")
                 )
-                result = await self.db.execute(rescue_match_query)
-                match = result.scalar_one_or_none()
+                .where(
+                    ScrobbleResolutionSearchIndex.track_name_vector.op("@@")(track_query) &
+                    ScrobbleResolutionSearchIndex.artist_name_vector.op("@@")(artist_query) &
+                    ScrobbleResolutionSearchIndex.album_title_vector.op("@@")(album_query)
+                )
+                .order_by(text("score DESC"))
+                .limit(limit)
+            )
 
-                if not match:
-                    logger.warning("Rescue search failed too. No track found.")
-                    return None
+        # Relaxed: track + artist
+        if artist_name:
+            search_attempts.append(
+                select(
+                    ScrobbleResolutionSearchIndex.track_uuid,
+                    weighted_rank.label("score")
+                )
+                .where(
+                    ScrobbleResolutionSearchIndex.track_name_vector.op("@@")(track_query) &
+                    ScrobbleResolutionSearchIndex.artist_name_vector.op("@@")(artist_query)
+                )
+                .order_by(text("score DESC"))
+                .limit(limit)
+            )
 
-        track_query = (
+        # More relaxed: track only
+        search_attempts.append(
+            select(
+                ScrobbleResolutionSearchIndex.track_uuid,
+                weighted_rank.label("score")
+            )
+            .where(
+                ScrobbleResolutionSearchIndex.track_name_vector.op("@@")(track_query)
+            )
+            .order_by(text("score DESC"))
+            .limit(limit)
+        )
+
+        # Try each query until matches
+        matches = []
+        for stmt in search_attempts:
+            result = await self.db.exec(stmt)
+            matches = result.all()
+            if matches:
+                break  # Stop at first successful match
+
+        if not matches:
+            return []
+
+        # Fetch full Track models
+        track_uuids = [match.track_uuid for match in matches]
+
+        track_stmt = (
             select(Track)
-            .where(Track.track_uuid == match.track_uuid)
+            .where(Track.track_uuid.in_(track_uuids))
             .options(
                 selectinload(Track.artists),
-                selectinload(Track.albums).selectinload(Album.types)
+                selectinload(Track.albums).selectinload(Album.types),
             )
         )
-        result = await self.db.execute(track_query)
-        track = result.scalar_one_or_none()
+        track_result = await self.db.exec(track_stmt)
+        tracks = track_result.all()
 
-        if not track:
-            return None
+        # Map to match order
+        uuid_to_track = {track.track_uuid: track for track in tracks}
+        ordered_tracks = [uuid_to_track[uuid] for uuid in track_uuids if uuid in uuid_to_track]
 
-        track.artists = [a for a in track.artists if a.artist_uuid == match.artist_uuid]
-
-        if prefer_album_uuid:
-            preferred_album = next((a for a in track.albums if a.album_uuid == prefer_album_uuid), None)
-            if preferred_album:
-                track.albums = [preferred_album]
-            elif album_name and track.albums:
-                sorted_albums = sorted(
-                    track.albums,
-                    key=lambda a: rank_album_preference(a, album_name),
+        # Sort albums by album name similarity
+        if album_name:
+            for track in ordered_tracks:
+                track.albums.sort(
+                    key=lambda album: fuzz.token_sort_ratio(album.title.lower(), album_name.lower()),
                     reverse=True
                 )
-                track.albums = [sorted_albums[0]]
-            else:
-                track.albums = [a for a in track.albums if a.album_uuid == match.album_uuid]
-        elif album_name and track.albums:
-            sorted_albums = sorted(
-                track.albums,
-                key=lambda a: rank_album_preference(a, album_name),
-                reverse=True
-            )
-            track.albums = [sorted_albums[0]]
-        else:
-            track.albums = [a for a in track.albums if a.album_uuid == match.album_uuid]
+                if track.albums:
+                    track.albums = [track.albums[0]]  # <- only keep the best match
 
+        # Validate to Pydantic models
         track_list_adapter = TypeAdapter(List[TrackReadSimple])
-        return track_list_adapter.validate_python([track])
+        validated_tracks = track_list_adapter.validate_python(ordered_tracks)
 
+        return validated_tracks[:1]  # Return a list of 1 (or 0 if no match)
 
     def normalize(self, name: str) -> str:
         # Replace all dash variants with a plain hyphen, lowercase, strip whitespace
