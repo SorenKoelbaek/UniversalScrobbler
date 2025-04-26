@@ -126,7 +126,6 @@ class PlaybackHistoryService:
                 return CurrentlyPlaying(
                     **curr_playing.dict(),  # Map PlaybackHistory fields
                     duration_seconds=duration_seconds,  # Insert new field
-                    is_still_playing=True,  # Always True here
                 )
 
         return None
