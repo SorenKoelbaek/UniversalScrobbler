@@ -100,24 +100,36 @@ class PlaybackHistoryService:
         statement = (
             select(PlaybackHistory)
             .where(PlaybackHistory.user_uuid == user.user_uuid, PlaybackHistory.is_still_playing)
-            .options(selectinload(PlaybackHistory.track),
-                     selectinload(PlaybackHistory.album).selectinload(Album.artists),
-                     selectinload(PlaybackHistory.device))
+            .options(
+                selectinload(PlaybackHistory.track),
+                selectinload(PlaybackHistory.album).selectinload(Album.artists),
+                selectinload(PlaybackHistory.device),
+            )
             .order_by(PlaybackHistory.played_at.desc())
             .limit(1)
         )
 
         result = await self.db.exec(statement)
         playing = result.all()
-        if len(playing)> 0:
+
+        if playing:
             curr_playing = playing[0]
 
             played_at_utc = curr_playing.played_at.replace(tzinfo=timezone.utc)
-            if (datetime.now(timezone.utc) - played_at_utc).total_seconds() < 1000:
-                return curr_playing
-            else:
-                return None
 
+            # 🛠 Fetch duration
+            duration_seconds = await self.get_median_duration(curr_playing.track_uuid)
+
+            # 🛠 Validate if recent enough
+            if (datetime.now(timezone.utc) - played_at_utc).total_seconds() < 1000:
+                # 🛠 Safely construct CurrentlyPlaying model
+                return CurrentlyPlaying(
+                    **curr_playing.dict(),  # Map PlaybackHistory fields
+                    duration_seconds=duration_seconds,  # Insert new field
+                    is_still_playing=True,  # Always True here
+                )
+
+        return None
 
     async def get_current_play_message(self, user: User) -> dict:
         current_play: Optional[CurrentlyPlaying] = await self.get_currently_playing(user)
@@ -135,7 +147,7 @@ class PlaybackHistoryService:
             spotify_track_id=update.track.spotify_track,
             played_at=datetime.now(timezone.utc).replace(tzinfo=None),
             source=update.source,
-            full_play=False,
+            full_play=True,
             full_update=False,
             is_still_playing=True,
             track_uuid=uuid.uuid4(),
@@ -175,8 +187,7 @@ class PlaybackHistoryService:
         if read_tracks and device:
             read_track = read_tracks[0]
             current_playing = await self.get_currently_playing(user)
-
-            median_duration = await self.get_median_duration(read_track.track_uuid)
+            median_duration = current_playing.duration_seconds if current_playing else None
 
             if update.state == "paused" or update.state == "stopped":
                 if current_playing:
@@ -216,7 +227,7 @@ class PlaybackHistoryService:
                             current_playing.full_play = True
                             current_playing.is_still_playing = False
                     else:
-                        # New track started → mark previous depending on how long it played
+                        # New track started → finalize previous track
                         if median_duration is not None and time_elapsed < (median_duration * 0.2):
                             current_playing.full_play = False
                         else:
@@ -226,6 +237,7 @@ class PlaybackHistoryService:
                     self.db.add(current_playing)
                     await self.db.flush()
 
+                # 🌟 Now insert the new track as optimistically full_play = True
                 new_play = PlaybackHistory(
                     spotify_track_id=update.track.spotify_track,
                     user_uuid=user.user_uuid,
@@ -233,12 +245,13 @@ class PlaybackHistoryService:
                     album_uuid=self.pick_best_albums(read_track, update.track.album_name).album_uuid,
                     source=update.source,
                     device_uuid=device.device_uuid,
-                    full_play=False,
+                    full_play=True,  # 🛠️  <<< Start new track assuming it will complete fully
                     is_still_playing=True,
                 )
                 self.db.add(new_play)
                 await self.db.commit()
 
+                # Update the "currently playing" model
                 current_playing = await self.get_currently_playing(user)
                 curr_playing = CurrentlyPlaying.model_validate(current_playing)
                 curr_playing.is_still_playing = True

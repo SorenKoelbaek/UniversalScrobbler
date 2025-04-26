@@ -43,6 +43,7 @@ class PlaybackHistorySimple(PlaybackHistoryBase):
         from_attributes=True
 
 class CurrentlyPlaying(PlaybackHistorySimple):
+    duration_seconds: Optional[int] = None
     is_still_playing: bool
 
 
