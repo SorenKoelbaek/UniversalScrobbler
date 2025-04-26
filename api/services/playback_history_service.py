@@ -205,6 +205,8 @@ class PlaybackHistoryService:
                 played_at_utc = current_playing.played_at.replace(tzinfo=timezone.utc)
                 time_elapsed = (update.timestamp - played_at_utc).total_seconds()
 
+                logger.info(f"Time elapsed: {time_elapsed} seconds of a median duration of {median_duration} seconds")
+
                 if median_duration is not None and time_elapsed < (median_duration * 0.2):
                     current_playing.full_play = False
                 else:
