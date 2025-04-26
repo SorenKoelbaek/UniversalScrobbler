@@ -275,7 +275,7 @@ class PlaybackHistoryService:
             median = (durations[(n - 1) // 2] + durations[n // 2]) / 2.0
         return median
 
-def pick_best_albums(self, track, album_name: str) -> Optional[Album]:
+    def pick_best_albums(self, track, album_name: str) -> Optional[Album]:
         if not track.albums:
             return None
 
@@ -290,7 +290,7 @@ def pick_best_albums(self, track, album_name: str) -> Optional[Album]:
             key=lambda a: a.release_date or datetime(9999, 1, 1)
         )[0]
 
-async def send_currently_playing(self, user: User, playing: CurrentlyPlaying):
+    async def send_currently_playing(self, user: User, playing: CurrentlyPlaying):
         message_model = CurrentlyPlaying.model_validate(playing)
         await self.websocket_service.send_to_user(user.user_uuid, message_model)
 
