@@ -25,9 +25,9 @@ const PlaybackTrackList = ({ plays }) => {
         <TableBody>
           {plays.map((play) => (
             <TableRow key={play.playback_history_uuid}>
-              <TableCell>{play.track?.name || "Unknown"}</TableCell>
-              <TableCell>{play.album?.artists?.map(a => a.name).join(", ") || "Unknown"}</TableCell>
-              <TableCell>{play.album?.title || "Unknown"}</TableCell>
+              <TableCell>{play.song_title || "Unknown"}</TableCell>
+              <TableCell>{play.artists?.map(a => a.name).join(", ") || "Unknown"}</TableCell>
+              <TableCell>{play.album_title || "Unknown"}</TableCell>
               <TableCell>
                 {new Date(play.played_at).toLocaleString(undefined, {
                   year: 'numeric',
