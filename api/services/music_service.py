@@ -367,7 +367,7 @@ class MusicService:
         track_query = func.websearch_to_tsquery('simple', track_name)
         artist_query = func.websearch_to_tsquery('simple', artist_name) if artist_name else None
         album_query = func.websearch_to_tsquery('simple', album_name) if album_name else None
-        limit: int = 5,
+        limit: int = 5
         # Define weighted score
         weighted_rank = (
                 1.0 * func.ts_rank(ScrobbleResolutionSearchIndex.track_name_vector, track_query) +
