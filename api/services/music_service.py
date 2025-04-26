@@ -355,6 +355,30 @@ class MusicService:
         tract_list_adapter = TypeAdapter(list[TrackRead])
         return tract_list_adapter.validate_python(result)
 
+    def clean_search_input(s: str) -> str:
+        if not s:
+            return ""
+
+        s = s.lower()
+
+        # Remove certain words commonly added to versions
+        s = re.sub(
+            r'\b(remaster(ed)?|remix|deluxe|expanded|anniversary|special|edition|mono|stereo|live|version|explicit)\b',
+            '',
+            s
+        )
+
+        # Remove anything inside parentheses
+        s = re.sub(r'\(.*?\)', '', s)
+
+        # Remove standalone 4-digit years like 1999, 2008
+        s = re.sub(r'\b(19|20)\d{2}\b', '', s)
+
+        # Collapse multiple spaces into one
+        s = re.sub(r'\s+', ' ', s)
+
+        return s.strip()
+
     async def search_track(
             self,
             user_uuid: UUID,
@@ -364,6 +388,13 @@ class MusicService:
             prefer_album_uuid: Optional[UUID] = None,
     ) -> List[TrackReadSimple]:
         # Build tsquery objects
+
+        track_name = self.clean_search_input(track_name)
+        if artist_name:
+            artist_name = self.clean_search_input(artist_name)
+        if album_name:
+            album_name = self.clean_search_input(album_name)
+
         track_query = func.websearch_to_tsquery('simple', track_name)
         artist_query = func.websearch_to_tsquery('simple', artist_name) if artist_name else None
         album_query = func.websearch_to_tsquery('simple', album_name) if album_name else None
