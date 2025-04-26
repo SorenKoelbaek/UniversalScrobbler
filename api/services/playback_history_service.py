@@ -134,7 +134,7 @@ class PlaybackHistoryService:
 
     async def add_listen(self, user: User, play: str):
         update = PlaybackUpdatePayload.model_validate(play)
-        logger.debug(f"Adding {update}")
+        logger.info(f"Adding {update}")
 
         is_still_playing = update.state != "paused"
 
