@@ -254,6 +254,7 @@ class PlaybackHistoryService:
                 # Update the "currently playing" model
                 current_playing = await self.get_currently_playing(user)
                 curr_playing = CurrentlyPlaying.model_validate(current_playing)
+                curr_playing.is_full_ = True
                 curr_playing.is_still_playing = True
                 curr_playing.full_update = True
                 await self.send_currently_playing(user, curr_playing)
