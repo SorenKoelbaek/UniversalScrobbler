@@ -355,7 +355,7 @@ class MusicService:
         tract_list_adapter = TypeAdapter(list[TrackRead])
         return tract_list_adapter.validate_python(result)
 
-    def clean_search_input(s: str) -> str:
+    def clean_search_input(self, s: str) -> str:
         if not s:
             return ""
 
