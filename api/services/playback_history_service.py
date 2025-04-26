@@ -203,7 +203,8 @@ class PlaybackHistoryService:
 
             if current_playing:
                 played_at_utc = current_playing.played_at.replace(tzinfo=timezone.utc)
-                time_elapsed = (update.timestamp - played_at_utc).total_seconds()
+                now = datetime.now(timezone.utc)
+                time_elapsed = (now - played_at_utc).total_seconds()
 
                 logger.info(f"Time elapsed: {time_elapsed} seconds of a median duration of {median_duration} seconds")
 
