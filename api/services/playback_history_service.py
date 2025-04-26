@@ -99,11 +99,14 @@ class PlaybackHistoryService:
     async def get_currently_playing(self, user: User) -> Optional[CurrentlyPlaying]:
         statement = (
             select(PlaybackHistory)
-            .where(PlaybackHistory.user_uuid == user.user_uuid, PlaybackHistory.is_still_playing)
+            .where(
+                PlaybackHistory.user_uuid == user.user_uuid,
+                PlaybackHistory.is_still_playing
+            )
             .options(
                 selectinload(PlaybackHistory.track),
                 selectinload(PlaybackHistory.album).selectinload(Album.artists),
-                selectinload(PlaybackHistory.device),
+                selectinload(PlaybackHistory.device)
             )
             .order_by(PlaybackHistory.played_at.desc())
             .limit(1)
@@ -116,19 +119,17 @@ class PlaybackHistoryService:
             curr_playing = playing[0]
 
             played_at_utc = curr_playing.played_at.replace(tzinfo=timezone.utc)
+            time_since_played = (datetime.now(timezone.utc) - played_at_utc).total_seconds()
 
-            # 🛠 Fetch duration
-            duration_seconds = await self.get_median_duration(curr_playing.track_uuid)
-
-            # 🛠 Validate if recent enough
-            if (datetime.now(timezone.utc) - played_at_utc).total_seconds() < 1000:
-                # 🛠 Safely construct CurrentlyPlaying model
-                return CurrentlyPlaying(
-                    **curr_playing.dict(),  # Map PlaybackHistory fields
-                    duration_seconds=duration_seconds,  # Insert new field
-                )
-
-        return None
+            if time_since_played < 1000:
+                validated = CurrentlyPlaying.model_validate(curr_playing)
+                # Add optional extension field AFTER validation
+                validated.duration_seconds = await self.get_median_duration(curr_playing.track_uuid)
+                return validated
+            else:
+                return None
+        else:
+            return None
 
     async def get_current_play_message(self, user: User) -> dict:
         current_play: Optional[CurrentlyPlaying] = await self.get_currently_playing(user)
