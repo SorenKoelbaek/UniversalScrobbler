@@ -360,11 +360,11 @@ class MusicService:
             track_name: Optional[str] = None,
             artist_name: Optional[str] = None,
             album_name: Optional[str] = None,
+            prefer_album_uuid: Optional[UUID] = None,  # ✅ New optional argument
     ):
         if not track_name:
             return None
 
-        # 1. Full-text query based on exact terms
         raw_query = f"{track_name or ''} {artist_name or ''} {album_name or ''}"
         logger.info(f"Raw query: {raw_query}")
         ts_query = func.plainto_tsquery("english", raw_query)
@@ -404,7 +404,7 @@ class MusicService:
             if not match:
                 logger.warning("Fallback fulltext query returned no match.")
                 return None
-        # 2. Fetch full track with eager loads
+
         track_query = (
             select(Track)
             .where(Track.track_uuid == match.track_uuid)
@@ -419,9 +419,22 @@ class MusicService:
         if not track:
             return None
 
-        # 3. Strict filter: only keep matching artist and album from the vector result
         track.artists = [a for a in track.artists if a.artist_uuid == match.artist_uuid]
-        if album_name and track.albums:
+
+        if prefer_album_uuid:
+            preferred_album = next((a for a in track.albums if a.album_uuid == prefer_album_uuid), None)
+            if preferred_album:
+                track.albums = [preferred_album]
+            elif album_name and track.albums:
+                sorted_albums = sorted(
+                    track.albums,
+                    key=lambda a: rank_album_preference(a, album_name),
+                    reverse=True
+                )
+                track.albums = [sorted_albums[0]]
+            else:
+                track.albums = [a for a in track.albums if a.album_uuid == match.album_uuid]
+        elif album_name and track.albums:
             sorted_albums = sorted(
                 track.albums,
                 key=lambda a: rank_album_preference(a, album_name),
@@ -429,9 +442,7 @@ class MusicService:
             )
             track.albums = [sorted_albums[0]]
         else:
-            # Fallback to exact match from index
             track.albums = [a for a in track.albums if a.album_uuid == match.album_uuid]
-
 
         track_list_adapter = TypeAdapter(List[TrackReadSimple])
         return track_list_adapter.validate_python([track])
