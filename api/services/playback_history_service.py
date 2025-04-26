@@ -172,14 +172,14 @@ class PlaybackHistoryService:
         # Stage 1️⃣: Detect if same track without searching
         if current_playing:
             if update.source == "Spotify" and update.track.spotify_track and current_playing.spotify_track_id == update.track.spotify_track:
-                logger.debug("🎵 Same Spotify track detected, updating currently playing only.")
+                logger.info("🎵 Same Spotify track detected, updating currently playing only.")
                 return
 
             if update.source == "Shazam" and update.track.song_name and current_playing.track.name:
                 normalized_new = update.track.song_name.strip().lower()
                 normalized_current = current_playing.track.name.strip().lower()
                 if normalized_new == normalized_current:
-                    logger.debug("🎵 Same Shazam track title detected, updating currently playing only.")
+                    logger.info("🎵 Same Shazam track title detected, updating currently playing only.")
                     return
 
         # Stage 2️⃣: Search track
