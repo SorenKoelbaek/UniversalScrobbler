@@ -169,6 +169,20 @@ class PlaybackHistoryService:
 
         current_playing = await self.get_currently_playing(user)
 
+        # Stage 1️⃣: Detect if same track without searching
+        if current_playing:
+            if update.source == "Spotify" and update.track.spotify_track and current_playing.spotify_track_id == update.track.spotify_track:
+                logger.debug("🎵 Same Spotify track detected, updating currently playing only.")
+                return
+
+            if update.source == "Shazam" and update.track.song_name and current_playing.track.name:
+                normalized_new = update.track.song_name.strip().lower()
+                normalized_current = current_playing.track.name.strip().lower()
+                if normalized_new == normalized_current:
+                    logger.debug("🎵 Same Shazam track title detected, updating currently playing only.")
+                    return
+
+        # Stage 2️⃣: Search track
         read_tracks = await self.music_service.search_track(
             user_uuid=user.user_uuid,
             track_name=update.track.song_name,
@@ -186,10 +200,6 @@ class PlaybackHistoryService:
         if read_tracks and device:
             read_track = read_tracks[0]
             median_duration = await self.get_median_duration(read_track.track_uuid)
-
-            if update.source == "Spotify" and current_playing and current_playing.spotify_track_id == update.track.spotify_track:
-                logger.debug("🎵 Same Spotify track detected, updating currently playing only.")
-                return
 
             if current_playing:
                 played_at_utc = current_playing.played_at.replace(tzinfo=timezone.utc)
@@ -222,7 +232,6 @@ class PlaybackHistoryService:
                 curr_playing.is_still_playing = True
                 curr_playing.full_update = True
                 await self.send_currently_playing(user, curr_playing)
-
         else:
             logger.debug(f"Skipping {update}, unknown song")
 
