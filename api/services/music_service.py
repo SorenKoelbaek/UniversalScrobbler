@@ -360,7 +360,7 @@ class MusicService:
             track_name: Optional[str] = None,
             artist_name: Optional[str] = None,
             album_name: Optional[str] = None,
-            prefer_album_uuid: Optional[UUID] = None,  # ✅ New optional argument
+            prefer_album_uuid: Optional[UUID] = None,
     ):
         if not track_name:
             return None
@@ -382,7 +382,8 @@ class MusicService:
             def clean_search_input(s: str) -> str:
                 import re
                 s = s.lower()
-                s = re.sub(r'\b(remaster(ed)?|remix|version|live|mono|stereo|concept)\b', '', s)
+                s = re.sub(r'\b(remaster(ed)?|remix|deluxe|expanded|anniversary|special|edition|mono|stereo|live|version|explicit)\b', '', s)
+                s = re.sub(r'\(.*?\)', '', s)  # remove anything inside parentheses
                 s = re.sub(r'\b(19|20)\d{2}\b', '', s)  # remove standalone years
                 s = re.sub(r'\s+', ' ', s)
                 return s.strip()
@@ -397,13 +398,28 @@ class MusicService:
                 .order_by(func.ts_rank(ScrobbleResolutionIndex.search_vector, ts_query_clean).desc())
                 .limit(1)
             )
-
             result = await self.db.execute(fallback_match_query)
             match = result.scalar_one_or_none()
 
             if not match:
                 logger.warning("Fallback fulltext query returned no match.")
-                return None
+                # FINAL STAGE RESCUE: try finding just by track and artist name
+                rescue_query = f"{track_name or ''} {artist_name or ''}"
+                ts_query_rescue = func.plainto_tsquery("english", rescue_query)
+                logger.info(f"Rescue query: {rescue_query}")
+
+                rescue_match_query = (
+                    select(ScrobbleResolutionIndex)
+                    .where(ScrobbleResolutionIndex.search_vector.op("@@")(ts_query_rescue))
+                    .order_by(func.ts_rank(ScrobbleResolutionIndex.search_vector, ts_query_rescue).desc())
+                    .limit(1)
+                )
+                result = await self.db.execute(rescue_match_query)
+                match = result.scalar_one_or_none()
+
+                if not match:
+                    logger.warning("Rescue search failed too. No track found.")
+                    return None
 
         track_query = (
             select(Track)
@@ -446,6 +462,7 @@ class MusicService:
 
         track_list_adapter = TypeAdapter(List[TrackReadSimple])
         return track_list_adapter.validate_python([track])
+
 
     def normalize(self, name: str) -> str:
         # Replace all dash variants with a plain hyphen, lowercase, strip whitespace

@@ -202,8 +202,6 @@ class PlaybackHistoryService:
         if read_tracks and device:
             read_track = read_tracks[0]
 
-
-
             if current_playing:
                 median_duration = await self.get_median_duration(current_playing.track_uuid)
                 played_at_utc = current_playing.played_at.replace(tzinfo=timezone.utc)
@@ -240,6 +238,22 @@ class PlaybackHistoryService:
                 curr_playing.full_update = True
                 await self.send_currently_playing(user, curr_playing)
         else:
+            if current_playing:
+                median_duration = await self.get_median_duration(current_playing.track_uuid)
+                played_at_utc = current_playing.played_at.replace(tzinfo=timezone.utc)
+                now = datetime.now(timezone.utc)
+                time_elapsed = (now - played_at_utc).total_seconds()
+
+                logger.info(f"Time elapsed: {time_elapsed} seconds of a median duration of {median_duration} seconds")
+
+                if median_duration is not None and time_elapsed < (median_duration * 0.2):
+                    current_playing.full_play = False
+                else:
+                    current_playing.full_play = True
+                current_playing.is_still_playing = False
+                self.db.add(current_playing)
+                await self.db.flush()
+
             logger.debug(f"Skipping {update}, unknown song")
 
     # --- helper:

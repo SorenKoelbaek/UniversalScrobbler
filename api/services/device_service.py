@@ -14,10 +14,17 @@ class DeviceService:
 
     async def get_or_create_device(self, user: User, device_id: str, device_name: str, ) -> Device:
         with self.db.no_autoflush:
-            result = await self.db.execute(select(Device).where(
-            Device.user_uuid == user.user_uuid,
-            Device.device_id == device_id))
-            device = result.scalar_one_or_none()
+            if device_id is None:
+                result = await self.db.execute(select(Device).where(
+                    Device.user_uuid == user.user_uuid,
+                    Device.device_name == device_name))
+                device = result.scalar_one_or_none()
+            else:
+
+                result = await self.db.execute(select(Device).where(
+                Device.user_uuid == user.user_uuid,
+                Device.device_id == device_id))
+                device = result.scalar_one_or_none()
             if not device:
                 device = Device(
                     user_uuid=user.user_uuid,

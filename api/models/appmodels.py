@@ -299,7 +299,6 @@ class PlaybackUpdatePayload(BaseModel):
     source: Optional[str]  # NEW: 'spotify' or 'shazam'
     track: Optional[PlaybackUpdateTrack]
     device: Optional[PlaybackUpdateDevice]
-    timestamp: Optional[datetime] = datetime.now(timezone.utc)
 
 
 class websocketMessage(BaseModel):
