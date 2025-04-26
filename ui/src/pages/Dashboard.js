@@ -14,9 +14,6 @@ const Dashboard = () => {
       <Grid container spacing={2}>
         <Grid item xs={12} sm={6} md={4}>
           <Card>
-            <CardContent>
-              <TrackCountBarChart />
-            </CardContent>
           </Card>
         </Grid>
 

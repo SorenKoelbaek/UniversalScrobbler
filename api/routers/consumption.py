@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta, UTC
 from dependencies.auth import get_current_user
-from models.appmodels import PlaybackHistorySimple, CurrentlyPlaying
+from models.appmodels import PlaybackHistorySimple, CurrentlyPlaying, PaginatedResponse
 from models.sqlmodels import User
 from typing import List
 from services.playback_history_service import PlaybackHistoryService
@@ -14,14 +14,16 @@ router = APIRouter(
 )
 
 
-@router.get("/history", response_model=List[PlaybackHistorySimple])
+@router.get("/history", response_model=PaginatedResponse[PlaybackHistorySimple])
 async def get_consumption_history(
-    days: int = Query(7, ge=1, le=90),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_session),
 ):
     service = PlaybackHistoryService(db)
-    return await service.get_user_playback_history(user, days)
+    return await service.get_user_playback_history(user, offset=offset, limit=limit)
+
 
 
 @router.get("/currently-playing", response_model=PlaybackHistorySimple)

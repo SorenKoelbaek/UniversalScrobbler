@@ -25,7 +25,8 @@ import TrackDetail from "./pages/TrackDetail";
 import ArtistDetail from "./pages/ArtistDetail";
 import Discover from "./pages/Discover";
 
-import LiveSessionCard from "./components/LiveSessionCard"; // ✅ added
+import LiveSessionCard from "./components/LiveSessionCard";
+import ListeningHistory from "./pages/ListeningHistory"; // ✅ added
 
 const navLinks = [
   { label: "Collection", path: "/collection" },
@@ -119,6 +120,10 @@ const App = () => {
           <Route
             path="/discover"
             element={<ProtectedRoute><Discover /></ProtectedRoute>}
+          />
+          <Route
+            path="/listening-history"
+            element={<ProtectedRoute><ListeningHistory /></ProtectedRoute>}
           />
         </Routes>
       </Box>

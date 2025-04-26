@@ -9,7 +9,7 @@ const TrackCountBarChart = () => {
   const [data, setData] = useState([]);
 
   useEffect(() => {
-    apiClient.get("/consumption/history?days=7").then((response) => {
+    apiClient.get("/consumption/history").then((response) => {
       const counts = {};
 
       response.data.forEach((entry) => {
