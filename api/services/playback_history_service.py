@@ -199,7 +199,7 @@ class PlaybackHistoryService:
 
         if read_tracks and device:
             read_track = read_tracks[0]
-            median_duration = await self.get_median_duration(read_track.track_uuid)
+            median_duration = await self.get_median_duration(current_playing.track_uuid)
 
             if current_playing:
                 played_at_utc = current_playing.played_at.replace(tzinfo=timezone.utc)
