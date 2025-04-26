@@ -136,6 +136,8 @@ class PlaybackHistoryService:
         update = PlaybackUpdatePayload.model_validate(play)
         logger.debug(f"Adding {update}")
 
+        is_still_playing = update.state != "paused"
+
         quick_update = CurrentlyPlaying(
             playback_history_uuid=uuid.uuid4(),
             spotify_track_id=update.track.spotify_track,
@@ -143,7 +145,7 @@ class PlaybackHistoryService:
             source=update.source,
             full_play=True,
             full_update=False,
-            is_still_playing=True,
+            is_still_playing=is_still_playing,
             track_uuid=uuid.uuid4(),
             album_uuid=uuid.uuid4(),
             track={
@@ -172,7 +174,7 @@ class PlaybackHistoryService:
             track_name=update.track.song_name,
             artist_name=update.track.artist_name,
             album_name=update.track.album_name,
-            prefer_album_uuid=current_playing.album_uuid if current_playing else None,  # ✅ only if we have it
+            prefer_album_uuid=current_playing.album_uuid if current_playing else None,
         )
 
         device = await self.device_service.get_or_create_device(
@@ -183,15 +185,12 @@ class PlaybackHistoryService:
 
         if read_tracks and device:
             read_track = read_tracks[0]
-
             median_duration = await self.get_median_duration(read_track.track_uuid)
 
-            # 1️⃣ If SPOTIFY and same track ID, update instead of insert
             if update.source == "Spotify" and current_playing and current_playing.spotify_track_id == update.track.spotify_track:
                 logger.debug("🎵 Same Spotify track detected, updating currently playing only.")
                 return
 
-            # 2️⃣ Otherwise: properly finalize current_playing
             if current_playing:
                 played_at_utc = current_playing.played_at.replace(tzinfo=timezone.utc)
                 time_elapsed = (update.timestamp - played_at_utc).total_seconds()
@@ -204,7 +203,6 @@ class PlaybackHistoryService:
                 self.db.add(current_playing)
                 await self.db.flush()
 
-            # 3️⃣ Insert new PlaybackHistory
             new_play = PlaybackHistory(
                 spotify_track_id=update.track.spotify_track,
                 user_uuid=user.user_uuid,
@@ -213,12 +211,11 @@ class PlaybackHistoryService:
                 source=update.source,
                 device_uuid=device.device_uuid,
                 full_play=True,
-                is_still_playing=True,
+                is_still_playing=is_still_playing,
             )
             self.db.add(new_play)
             await self.db.commit()
 
-            # 4️⃣ Update current_playing model to client
             current_playing = await self.get_currently_playing(user)
             if current_playing:
                 curr_playing = CurrentlyPlaying.model_validate(current_playing)
