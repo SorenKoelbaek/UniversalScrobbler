@@ -117,15 +117,9 @@ class PlaybackHistoryService:
 
         if playing:
             curr_playing = playing[0]
-
             played_at_utc = curr_playing.played_at.replace(tzinfo=timezone.utc)
-            time_since_played = (datetime.now(timezone.utc) - played_at_utc).total_seconds()
-
-            if time_since_played < 1000:
-                validated = CurrentlyPlaying.model_validate(curr_playing)
-                # Add optional extension field AFTER validation
-                validated.duration_seconds = await self.get_median_duration(curr_playing.track_uuid)
-                return validated
+            if (datetime.now(timezone.utc) - played_at_utc).total_seconds() < 1000:
+                return curr_playing
             else:
                 return None
         else:
@@ -187,23 +181,55 @@ class PlaybackHistoryService:
         if read_tracks and device:
             read_track = read_tracks[0]
             current_playing = await self.get_currently_playing(user)
-            median_duration = current_playing.duration_seconds if current_playing else None
+            median_duration = await self.get_median_duration(read_track.track_uuid)
 
-            if update.state == "paused" or update.state == "stopped":
+            if update.state == "playing":
+                if current_playing:
+                    played_at_utc = current_playing.played_at.replace(tzinfo=timezone.utc)
+                    time_elapsed = (update.timestamp - played_at_utc).total_seconds()
+
+                    # If previous track is different
+                    if current_playing.track_uuid != read_track.track_uuid:
+                        if median_duration is not None and time_elapsed < (median_duration * 0.2):
+                            current_playing.full_play = False
+                            logger.debug(
+                                f"🎯 Previous track played too short ({time_elapsed}s < 20% of {median_duration}s), marking NOT full_play")
+                        else:
+                            current_playing.full_play = True
+                        current_playing.is_still_playing = False
+                        self.db.add(current_playing)
+                        await self.db.flush()
+
+                # Always insert new track assuming full_play = True
+                new_play = PlaybackHistory(
+                    spotify_track_id=update.track.spotify_track,
+                    user_uuid=user.user_uuid,
+                    track_uuid=read_track.track_uuid,
+                    album_uuid=self.pick_best_albums(read_track, update.track.album_name).album_uuid,
+                    source=update.source,
+                    device_uuid=device.device_uuid,
+                    full_play=True,
+                    is_still_playing=True,
+                )
+                self.db.add(new_play)
+                await self.db.commit()
+
+                current_playing = await self.get_currently_playing(user)
+                curr_playing = CurrentlyPlaying.model_validate(current_playing)
+                curr_playing.is_still_playing = True
+                curr_playing.full_update = True
+                await self.send_currently_playing(user, curr_playing)
+
+            elif update.state == "paused" or update.state == "stopped":
                 if current_playing:
                     played_at_utc = current_playing.played_at.replace(tzinfo=timezone.utc)
                     time_elapsed = (update.timestamp - played_at_utc).total_seconds()
 
                     if median_duration is not None and time_elapsed < (median_duration * 0.2):
                         current_playing.full_play = False
-                        logger.debug(
-                            f"⏸️ Playback paused/stopped too early, marking as not full_play ({time_elapsed}s < 20% of {median_duration}s)"
-                        )
+                        logger.debug(f"⏸️ Paused/stopped too early ({time_elapsed}s), marking NOT full_play")
                     else:
-                        logger.debug(
-                            f"⏸️ Playback paused/stopped but enough played, keeping full_play ({time_elapsed}s)"
-                        )
-                    logger.info("⏸️ Playback paused/stopped")
+                        logger.debug(f"⏸️ Paused/stopped but enough played ({time_elapsed}s), keeping full_play")
                     current_playing.is_still_playing = False
                     self.db.add(current_playing)
                     await self.db.commit()
@@ -213,51 +239,6 @@ class PlaybackHistoryService:
                     curr_playing.full_update = True
                     await self.send_currently_playing(user, curr_playing)
 
-            if update.state == "playing":
-                if current_playing:
-                    played_at_utc = current_playing.played_at.replace(tzinfo=timezone.utc)
-                    time_elapsed = (update.timestamp - played_at_utc).total_seconds()
-
-                    if current_playing.track_uuid == read_track.track_uuid:
-                        if time_elapsed <= (median_duration * 1.5):
-                            # Same track, still within expected window → Ignore this update
-                            return
-                        else:
-                            # Same track but way too long → Treat as a fresh scrobble
-                            current_playing.full_play = True
-                            current_playing.is_still_playing = False
-                    else:
-                        # New track started → finalize previous track
-                        if median_duration is not None and time_elapsed < (median_duration * 0.2):
-                            current_playing.full_play = False
-                        else:
-                            current_playing.full_play = True
-                        current_playing.is_still_playing = False
-
-                    self.db.add(current_playing)
-                    await self.db.flush()
-
-                # 🌟 Now insert the new track as optimistically full_play = True
-                new_play = PlaybackHistory(
-                    spotify_track_id=update.track.spotify_track,
-                    user_uuid=user.user_uuid,
-                    track_uuid=read_track.track_uuid,
-                    album_uuid=self.pick_best_albums(read_track, update.track.album_name).album_uuid,
-                    source=update.source,
-                    device_uuid=device.device_uuid,
-                    full_play=True,  # 🛠️  <<< Start new track assuming it will complete fully
-                    is_still_playing=True,
-                )
-                self.db.add(new_play)
-                await self.db.commit()
-
-                # Update the "currently playing" model
-                current_playing = await self.get_currently_playing(user)
-                curr_playing = CurrentlyPlaying.model_validate(current_playing)
-                curr_playing.is_full_ = True
-                curr_playing.is_still_playing = True
-                curr_playing.full_update = True
-                await self.send_currently_playing(user, curr_playing)
         else:
             logger.debug(f"Skipping {update}, unknown song")
 
