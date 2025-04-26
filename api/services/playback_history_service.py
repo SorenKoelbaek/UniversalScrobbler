@@ -140,6 +140,10 @@ class PlaybackHistoryService:
 
         current_playing = await self.get_currently_playing(user)
 
+        if update.state == "paused" and not current_playing:
+            logger.info(f"⏩ Skipping paused update — nothing currently playing.")
+            return
+
         # Stage 1️⃣: Detect if same track without searching
         if current_playing and is_still_playing:
             if update.source == "Spotify" and update.track.spotify_track and current_playing.spotify_track_id == update.track.spotify_track:
@@ -153,6 +157,21 @@ class PlaybackHistoryService:
                     logger.info("🎵 Same Shazam track title detected, updating currently playing only.")
                     return
 
+        if update.source == "Shazam" and current_playing:
+            if (
+                    update.track.song_name and update.track.artist_name
+                    and current_playing.track.name
+                    and current_playing.album.artists
+            ):
+                normalized_current_name = current_playing.track.name.strip().lower()
+                normalized_update_name = update.track.song_name.strip().lower()
+
+                normalized_current_artist = current_playing.album.artists[0].name.strip().lower()
+                normalized_update_artist = update.track.artist_name.strip().lower()
+
+                if normalized_current_name == normalized_update_name and normalized_current_artist == normalized_update_artist:
+                    logger.info(f"⏩ Skipping duplicate Shazam play for {update.track.song_name}")
+                    return
 
         quick_update = CurrentlyPlaying(
             playback_history_uuid=uuid.uuid4(),
