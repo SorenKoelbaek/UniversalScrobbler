@@ -52,31 +52,44 @@ class MusicService:
 
     async def get_album(self, album_uuid: UUID) -> AlbumRead:
         """Retrieve a single album based on UUID."""
-        result = await self.db.execute(select(Album)
-                                       .where(Album.album_uuid == album_uuid)
-                                       .options(selectinload(Album.artists),
-                                                selectinload(Album.tracks)
-                                                ,selectinload(Album.tags)
-                                                ,selectinload(Album.types)
-                                                ,selectinload(Album.releases)))
+        result = await self.db.execute(
+            select(Album)
+            .where(Album.album_uuid == album_uuid)
+            .options(
+                selectinload(Album.artists),
+                selectinload(Album.tracks),
+                selectinload(Album.tags),
+                selectinload(Album.types),
+                selectinload(Album.releases),
+            )
+        )
         album = result.scalar_one_or_none()
         if not album:
             raise HTTPException(status_code=404, detail="Album not found")
-            # Preload tag counts from bridge
+
+        # Preload tag counts from bridge
         tag_counts_result = await self.db.execute(
             select(AlbumTagBridge.tag_uuid, AlbumTagBridge.count)
             .where(AlbumTagBridge.album_uuid == album_uuid)
         )
         tag_counts = dict(tag_counts_result.all())
 
-        # Fetch track_number per track in the album
+        # Fetch track_number and canonical status per track
         track_numbers_result = await self.db.execute(
-            select(TrackAlbumBridge.track_uuid, TrackAlbumBridge.track_number)
-            .where(TrackAlbumBridge.album_uuid == album_uuid)
+            select(
+                TrackAlbumBridge.track_uuid,
+                TrackAlbumBridge.track_number,
+                TrackAlbumBridge.canonical_first,
+            ).where(TrackAlbumBridge.album_uuid == album_uuid)
         )
-        track_number_map = dict(track_numbers_result.all())
+        track_data = track_numbers_result.all()
 
-        # Build AlbumRead with tag counts and track_number injected
+        # Build maps
+        track_number_map = {track_uuid: track_number for track_uuid, track_number, canonical_first in track_data if
+                            canonical_first}
+        canonical_track_uuids = {track_uuid for track_uuid, _, canonical_first in track_data if canonical_first}
+
+        # Build AlbumRead with only canonical tracks
         album_read = AlbumRead.model_validate(album)
         album_read.tags = [
             TagBase(
@@ -85,6 +98,9 @@ class MusicService:
                 count=tag_counts.get(tag.tag_uuid, 0),
             )
             for tag in album.tags
+        ]
+        album_read.tracks = [
+            track for track in album_read.tracks if track.track_uuid in canonical_track_uuids
         ]
         for track in album_read.tracks:
             track.track_number = track_number_map.get(track.track_uuid)
