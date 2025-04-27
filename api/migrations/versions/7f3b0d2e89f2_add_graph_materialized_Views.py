@@ -19,13 +19,9 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Drop any existing views to replace with optimized definitions
-    op.execute("DROP MATERIALIZED VIEW IF EXISTS artist_album_tag_fingerprint;")
-    op.execute("DROP MATERIALIZED VIEW IF EXISTS album_tag_fingerprint;")
-
-    # Create album_tag_fingerprint with 3-step pre-aggregation
+    # Create album_tag_fingerprint only if it doesn't already exist
     op.execute("""
-    CREATE MATERIALIZED VIEW album_tag_fingerprint AS
+    CREATE MATERIALIZED VIEW IF NOT EXISTS album_tag_fingerprint AS
     WITH atb AS (
       SELECT album_uuid, tag_uuid, COUNT(*) AS ct
       FROM album_tag_bridge
@@ -70,17 +66,14 @@ def upgrade() -> None:
       tc.tag_count * 1.0 / at.total_count AS tag_weight
     FROM tag_counts tc
     JOIN album_totals at USING (album_uuid);
-    """
-    )
-
-    # Indexes for album_tag_fingerprint
+    """)
     op.execute("CREATE INDEX IF NOT EXISTS idx_album_tag_fingerprint_album_uuid ON album_tag_fingerprint (album_uuid);")
     op.execute("CREATE INDEX IF NOT EXISTS idx_album_tag_fingerprint_tag_uuid ON album_tag_fingerprint (tag_uuid);")
     op.execute("CREATE INDEX IF NOT EXISTS idx_album_tag_fingerprint_tag_weight ON album_tag_fingerprint (tag_weight);")
 
-    # Create artist_album_tag_fingerprint from the new lightweight view
+    # Create artist_album_tag_fingerprint only if it doesn't already exist
     op.execute("""
-    CREATE MATERIALIZED VIEW artist_album_tag_fingerprint AS
+    CREATE MATERIALIZED VIEW IF NOT EXISTS artist_album_tag_fingerprint AS
     SELECT
       aab.artist_uuid,
       atf.album_uuid,
@@ -94,15 +87,11 @@ def upgrade() -> None:
       ON alb.album_uuid = atf.album_uuid
     JOIN album_artist_bridge aab
       ON aab.album_uuid = alb.album_uuid;
-    """
-    )
-
-    # Indexes for artist_album_tag_fingerprint
+    """)
     op.execute("CREATE INDEX IF NOT EXISTS idx_artist_album_tag_fingerprint_artist_uuid ON artist_album_tag_fingerprint (artist_uuid);")
     op.execute("CREATE INDEX IF NOT EXISTS idx_artist_album_tag_fingerprint_album_uuid ON artist_album_tag_fingerprint (album_uuid);")
     op.execute("CREATE INDEX IF NOT EXISTS idx_artist_album_tag_fingerprint_tag_uuid ON artist_album_tag_fingerprint (tag_uuid);")
     op.execute("CREATE INDEX IF NOT EXISTS idx_artist_album_tag_fingerprint_tag_weight ON artist_album_tag_fingerprint (tag_weight);")
-
 
 def downgrade() -> None:
     # Drop materialized views and related indexes
