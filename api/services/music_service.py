@@ -51,61 +51,51 @@ class MusicService:
         self.db = db
 
     async def get_album(self, album_uuid: UUID) -> AlbumRead:
-        """Retrieve a single album based on UUID, loading only canonical tracks directly in query."""
+        # 1. Load album without tracks first
+        stmt_album = (
+            select(Album)
+            .options(
+                selectinload(Album.artists),
+                selectinload(Album.tags),
+                selectinload(Album.types),
+                selectinload(Album.releases),
+            )
+            .where(Album.album_uuid == album_uuid)
+        )
 
-        stmt = text("""
-            SELECT
-                a.album_uuid,
-                a.title,
-                a.image_url,
-                a.image_thumbnail_url,
-                a.release_date,
-                ar.artist_uuid,
-                ar.name AS artist_name,
-                r.album_release_uuid,
-                r.title AS release_title,
-                r.release_date AS release_date_release,
-                r.country,
-                at.album_type_uuid,
-                at.name AS type_name,
-                t.tag_uuid,
-                t.name AS tag_name,
-                ab.count AS tag_count,
-                tr.track_uuid,
-                tr.name AS track_name,
-                tab.track_number
-            FROM album a
-            LEFT JOIN album_artist_bridge aab ON a.album_uuid = aab.album_uuid
-            LEFT JOIN artist ar ON aab.artist_uuid = ar.artist_uuid
-            LEFT JOIN album_release r ON a.album_uuid = r.album_uuid
-            LEFT JOIN albumtypebridge atb ON a.album_uuid = atb.album_uuid
-            LEFT JOIN album_type at ON atb.album_type_uuid = at.album_type_uuid
-            LEFT JOIN album_tag_bridge ab ON a.album_uuid = ab.album_uuid
-            LEFT JOIN tag t ON ab.tag_uuid = t.tag_uuid
-            LEFT JOIN track_album_bridge tab ON a.album_uuid = tab.album_uuid AND tab.canonical_first IS TRUE
-            LEFT JOIN track tr ON tab.track_uuid = tr.track_uuid
-            WHERE a.album_uuid = :album_uuid
-        """)
-
-        # 2. Execute and load
-        result = await self.db.execute(stmt, {"album_uuid": str(album_uuid)})
-
-        album = result.fetchall()
+        result = await self.db.execute(stmt_album)
+        album = result.scalar_one_or_none()
 
         if not album:
             raise HTTPException(status_code=404, detail="Album not found")
 
-        # 3. Load the tag counts separately
+        # 2. Load canonical tracks separately
+        stmt_tracks = (
+            select(Track)
+            .join(TrackAlbumBridge, Track.track_uuid == TrackAlbumBridge.track_uuid)
+            .where(
+                TrackAlbumBridge.album_uuid == album_uuid,
+                TrackAlbumBridge.canonical_first == True,
+            )
+            .order_by(TrackAlbumBridge.track_number.asc())
+        )
+        result_tracks = await self.db.execute(stmt_tracks)
+        tracks = result_tracks.scalars().all()
+
+        # 3. Attach the tracks manually
+        album.tracks = tracks
+
+        # 4. Load tag counts separately
         tag_counts_result = await self.db.execute(
             select(AlbumTagBridge.tag_uuid, AlbumTagBridge.count)
             .where(AlbumTagBridge.album_uuid == album_uuid)
         )
         tag_counts = dict(tag_counts_result.all())
 
-        # 4. Validate album immediately
+        # 5. Validate
         album_read = AlbumRead.model_validate(album)
 
-        # 5. Overwrite album_read.tags with counts
+        # 6. Overwrite tag counts
         album_read.tags = [
             TagBase(
                 tag_uuid=tag.tag_uuid,
