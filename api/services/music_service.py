@@ -51,10 +51,12 @@ class MusicService:
         self.db = db
 
     async def get_album(self, album_uuid: UUID) -> AlbumRead:
-        # 1. Load album without tracks first
+        """Retrieve a single album, filtering only canonical tracks before model validation."""
+        # 1. Load the full album object (with all relations)
         stmt_album = (
             select(Album)
             .options(
+                selectinload(Album.tracks),
                 selectinload(Album.artists),
                 selectinload(Album.tags),
                 selectinload(Album.types),
@@ -69,21 +71,19 @@ class MusicService:
         if not album:
             raise HTTPException(status_code=404, detail="Album not found")
 
-        # 2. Load canonical tracks separately
-        stmt_tracks = (
-            select(Track)
-            .join(TrackAlbumBridge, Track.track_uuid == TrackAlbumBridge.track_uuid)
+        # 2. Get the UUIDs of canonical tracks
+        stmt_canonical_track_uuids = (
+            select(TrackAlbumBridge.track_uuid)
             .where(
                 TrackAlbumBridge.album_uuid == album_uuid,
-                TrackAlbumBridge.canonical_first == True,
+                TrackAlbumBridge.canonical_first.is_(True),
             )
-            .order_by(TrackAlbumBridge.track_number.asc())
         )
-        result_tracks = await self.db.execute(stmt_tracks)
-        tracks = result_tracks.scalars().all()
+        result_canonical = await self.db.execute(stmt_canonical_track_uuids)
+        canonical_track_uuids = {row[0] for row in result_canonical.all()}
 
-        # 3. Attach the tracks manually
-        album.tracks = tracks
+        # 3. Filter the album.tracks to only canonical
+        album.tracks = [track for track in album.tracks if track.track_uuid in canonical_track_uuids]
 
         # 4. Load tag counts separately
         tag_counts_result = await self.db.execute(
