@@ -52,28 +52,45 @@ class MusicService:
 
     async def get_album(self, album_uuid: UUID) -> AlbumRead:
         """Retrieve a single album based on UUID, loading only canonical tracks directly in query."""
-        # 1. Build the album query
-        stmt = (
-            select(Album)
-            .join(TrackAlbumBridge, TrackAlbumBridge.album_uuid == Album.album_uuid)
-            .join(Track, Track.track_uuid == TrackAlbumBridge.track_uuid)
-            .options(
-                contains_eager(Album.tracks),
-                selectinload(Album.artists),
-                selectinload(Album.tags),
-                selectinload(Album.types),
-                selectinload(Album.releases),
-            )
-            .where(
-                Album.album_uuid == album_uuid,
-                TrackAlbumBridge.canonical_first == True,
-            )
-            .order_by(TrackAlbumBridge.track_number.asc())
-        )
+
+        stmt = text("""
+            SELECT
+                a.album_uuid,
+                a.title,
+                a.image_url,
+                a.image_thumbnail_url,
+                a.release_date,
+                ar.artist_uuid,
+                ar.name AS artist_name,
+                r.album_release_uuid,
+                r.title AS release_title,
+                r.release_date AS release_date_release,
+                r.country,
+                at.album_type_uuid,
+                at.name AS type_name,
+                t.tag_uuid,
+                t.name AS tag_name,
+                ab.count AS tag_count,
+                tr.track_uuid,
+                tr.name AS track_name,
+                tab.track_number
+            FROM album a
+            LEFT JOIN album_artist_bridge aab ON a.album_uuid = aab.album_uuid
+            LEFT JOIN artist ar ON aab.artist_uuid = ar.artist_uuid
+            LEFT JOIN album_release r ON a.album_uuid = r.album_uuid
+            LEFT JOIN albumtypebridge atb ON a.album_uuid = atb.album_uuid
+            LEFT JOIN album_type at ON atb.album_type_uuid = at.album_type_uuid
+            LEFT JOIN album_tag_bridge ab ON a.album_uuid = ab.album_uuid
+            LEFT JOIN tag t ON ab.tag_uuid = t.tag_uuid
+            LEFT JOIN track_album_bridge tab ON a.album_uuid = tab.album_uuid AND tab.canonical_first IS TRUE
+            LEFT JOIN track tr ON tab.track_uuid = tr.track_uuid
+            WHERE a.album_uuid = :album_uuid
+        """)
 
         # 2. Execute and load
-        result = await self.db.execute(stmt)
-        album = result.unique().scalar_one_or_none()
+        result = await self.db.execute(stmt, {"album_uuid": str(album_uuid)})
+
+        album = result.fetchall()
 
         if not album:
             raise HTTPException(status_code=404, detail="Album not found")
