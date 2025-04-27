@@ -51,12 +51,12 @@ class MusicService:
         self.db = db
 
     async def get_album(self, album_uuid: UUID) -> AlbumRead:
-        """Retrieve a single album, filtering only canonical tracks before model validation."""
-        # 1. Load the full album object (with all relations)
+        """Retrieve a single album, filtering only canonical tracks after eager loading."""
+        # 1. Load album (with tracks eagerly loaded)
         stmt_album = (
             select(Album)
             .options(
-                selectinload(Album.tracks),
+                selectinload(Album.tracks),  # YES - eager load all tracks
                 selectinload(Album.artists),
                 selectinload(Album.tags),
                 selectinload(Album.types),
@@ -71,7 +71,7 @@ class MusicService:
         if not album:
             raise HTTPException(status_code=404, detail="Album not found")
 
-        # 2. Get the UUIDs of canonical tracks
+        # 2. Load the canonical track UUIDs
         stmt_canonical_track_uuids = (
             select(TrackAlbumBridge.track_uuid)
             .where(
@@ -82,10 +82,13 @@ class MusicService:
         result_canonical = await self.db.execute(stmt_canonical_track_uuids)
         canonical_track_uuids = {row[0] for row in result_canonical.all()}
 
-        # 3. Filter the album.tracks to only canonical
-        album.tracks = [track for track in album.tracks if track.track_uuid in canonical_track_uuids]
+        # 3. Now **replace album.tracks** with filtered list
+        album.tracks = [
+            track for track in album.tracks
+            if track.track_uuid in canonical_track_uuids
+        ]
 
-        # 4. Load tag counts separately
+        # 4. Load tag counts
         tag_counts_result = await self.db.execute(
             select(AlbumTagBridge.tag_uuid, AlbumTagBridge.count)
             .where(AlbumTagBridge.album_uuid == album_uuid)
