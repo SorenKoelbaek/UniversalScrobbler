@@ -5,9 +5,9 @@ from datetime import datetime, UTC,  timezone
 from sqlalchemy import BigInteger, Column, String
 
 from uuid import UUID, uuid4
-from datetime import datetime
+from datetime import datetime, date
 from sqlalchemy.dialects.postgresql import TSVECTOR
-
+from sqlalchemy.dialects.postgresql import UUID as PGUUID, FLOAT, INTEGER, DATE
 
 def now_utc_naive():
     return datetime.now(timezone.utc).replace(tzinfo=None)
