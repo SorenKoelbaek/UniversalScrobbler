@@ -83,6 +83,8 @@ class MusicService:
         result_canonical = await self.db.execute(stmt_canonical_track_uuids)
         canonical_track_uuids = {row[0] for row in result_canonical.all()}
 
+        logger.info(f"Canonical tracks: {canonical_track_uuids}")
+
         # 3. Model validate first (detach!)
         album_read = AlbumRead.model_validate(album)
 
@@ -91,6 +93,8 @@ class MusicService:
             track for track in album_read.tracks
             if track.track_uuid in canonical_track_uuids
         ]
+
+        logger.info(album_read.tracks)
 
         # 5. Load and overwrite tag counts
         tag_counts_result = await self.db.execute(
