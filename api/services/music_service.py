@@ -51,47 +51,61 @@ class MusicService:
         self.db = db
 
     async def get_album(self, album_uuid: UUID) -> AlbumRead:
-        """Retrieve a single album, eagerly loading only canonical tracks."""
+        """Retrieve a single album, filter canonical tracks AFTER model validation."""
 
-        # 1. Build query: Album + canonical Tracks + other relations
-        stmt = (
+        # 1. Load the album + relations
+        stmt_album = (
             select(Album)
             .options(
+                selectinload(Album.tracks),
                 selectinload(Album.artists),
                 selectinload(Album.tags),
                 selectinload(Album.types),
                 selectinload(Album.releases),
-                selectinload(Album.tracks)
-                .options(with_loader_criteria(TrackAlbumBridge, TrackAlbumBridge.canonical_first.is_(True))),
             )
             .where(Album.album_uuid == album_uuid)
         )
 
-        # 2. Execute
-        result = await self.db.execute(stmt)
-        album = result.scalar_one_or_none()
+        result_album = await self.db.execute(stmt_album)
+        album = result_album.scalar_one_or_none()
 
         if not album:
             raise HTTPException(status_code=404, detail="Album not found")
 
-        # 3. Load tag counts separately
+        # 2. Load the canonical track UUIDs separately
+        stmt_canonical_track_uuids = (
+            select(TrackAlbumBridge.track_uuid)
+            .where(
+                TrackAlbumBridge.album_uuid == album_uuid,
+                TrackAlbumBridge.canonical_first.is_(True),
+            )
+        )
+        result_canonical = await self.db.execute(stmt_canonical_track_uuids)
+        canonical_track_uuids = {row[0] for row in result_canonical.all()}
+
+        # 3. Model validate first (detach!)
+        album_read = AlbumRead.model_validate(album)
+
+        # 4. Filter tracks AFTER validation
+        album_read.tracks = [
+            track for track in album_read.tracks
+            if track.track_uuid in canonical_track_uuids
+        ]
+
+        # 5. Load and overwrite tag counts
         tag_counts_result = await self.db.execute(
             select(AlbumTagBridge.tag_uuid, AlbumTagBridge.count)
             .where(AlbumTagBridge.album_uuid == album_uuid)
         )
         tag_counts = dict(tag_counts_result.all())
 
-        # 4. Validate
-        album_read = AlbumRead.model_validate(album)
-
-        # 5. Overwrite tag counts
         album_read.tags = [
             TagBase(
                 tag_uuid=tag.tag_uuid,
                 name=tag.name,
                 count=tag_counts.get(tag.tag_uuid, 0),
             )
-            for tag in album.tags
+            for tag in album_read.tags
         ]
 
         return album_read
