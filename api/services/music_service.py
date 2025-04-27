@@ -87,6 +87,9 @@ class MusicService:
 
         # 3. Model validate first (detach!)
         album_read = AlbumRead.model_validate(album)
+        logger.info(type(album.tracks[0]))  # should be <Track> SQLAlchemy model
+        logger.info(type(album_read.tracks[0]))  # should be <TrackRead> Pydantic model
+
 
         # 4. Filter tracks AFTER validation
         album_read.tracks = [
