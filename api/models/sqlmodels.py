@@ -277,6 +277,8 @@ class TrackAlbumBridge(SQLModel, table=True):
     track_uuid: UUID = Field(foreign_key="track.track_uuid", primary_key=True)
     album_uuid: UUID = Field(foreign_key="album.album_uuid", primary_key=True)
     track_number: Optional[str] = Field(default=None, nullable=True)
+    canonical_first: Optional[bool] = Field(default=False, nullable=False)
+
 
 class Album(SQLModel, table=True):
     __tablename__ = "album"
