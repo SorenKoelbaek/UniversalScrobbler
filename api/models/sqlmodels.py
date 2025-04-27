@@ -35,6 +35,48 @@ class SearchIndex(SQLModel, table=True):
         sa_column=Column("search_vector", TSVECTOR)
     )
 
+class AlbumTagFingerprint(SQLModel, table=True):
+    __tablename__ = "album_tag_fingerprint"
+    __table_args__ = {"info": {"skip_autogenerate": True}}
+
+    album_uuid: UUID = Field(
+        sa_column=Column("album_uuid", PGUUID(as_uuid=True), primary_key=True)
+    )
+    tag_uuid: UUID = Field(
+        sa_column=Column("tag_uuid", PGUUID(as_uuid=True), primary_key=True)
+    )
+    tag_count: int = Field(
+        sa_column=Column("tag_count", INTEGER, nullable=False)
+    )
+    tag_weight: float = Field(
+        sa_column=Column("tag_weight", FLOAT, nullable=False)
+    )
+
+
+class ArtistAlbumTagFingerprint(SQLModel, table=True):
+    __tablename__ = "artist_album_tag_fingerprint"
+    __table_args__ = {"info": {"skip_autogenerate": True}}
+
+    artist_uuid: UUID = Field(
+        sa_column=Column("artist_uuid", PGUUID(as_uuid=True), primary_key=True)
+    )
+    album_uuid: UUID = Field(
+        sa_column=Column("album_uuid", PGUUID(as_uuid=True), primary_key=True)
+    )
+    album_title: str = Field(nullable=False)
+    release_date: date = Field(
+        sa_column=Column("release_date", DATE, nullable=False)
+    )
+    tag_uuid: UUID = Field(
+        sa_column=Column("tag_uuid", PGUUID(as_uuid=True), primary_key=True)
+    )
+    tag_count: int = Field(
+        sa_column=Column("tag_count", INTEGER, nullable=False)
+    )
+    tag_weight: float = Field(
+        sa_column=Column("tag_weight", FLOAT, nullable=False)
+    )
+
 class ScrobbleResolutionSearchIndex(SQLModel, table=True):
     __tablename__ = "scrobble_resolution_search_index"
     __table_args__ = {"info": {"skip_autogenerate": True}}
