@@ -4,7 +4,7 @@ from redis.commands.search import Search
 from sqlalchemy import func
 from sqlmodel import select, or_, exists
 from pydantic import BaseModel, TypeAdapter
-from sqlalchemy.orm import selectinload, contains_eager
+from sqlalchemy.orm import selectinload, contains_eager, with_loader_criteria
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge, TrackVersion, TrackVersionTagBridge, \
     ArtistTagBridge, TrackAlbumBridge, AlbumArtistBridge, SearchIndex, ScrobbleResolutionIndex, \
