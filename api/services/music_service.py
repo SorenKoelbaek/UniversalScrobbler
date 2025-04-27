@@ -51,54 +51,55 @@ class MusicService:
         self.db = db
 
     async def get_album(self, album_uuid: UUID) -> AlbumRead:
-        """Retrieve a single album, filtering only canonical tracks after eager loading."""
-        # 1. Load album (with tracks eagerly loaded)
+        """Retrieve a single album, with only canonical tracks attached."""
+
+        # 1. Load the album WITHOUT tracks
         stmt_album = (
             select(Album)
             .options(
-                selectinload(Album.tracks),  # YES - eager load all tracks
                 selectinload(Album.artists),
                 selectinload(Album.tags),
                 selectinload(Album.types),
                 selectinload(Album.releases),
+                # ❌ No selectinload(Album.tracks) here
             )
             .where(Album.album_uuid == album_uuid)
         )
 
-        result = await self.db.execute(stmt_album)
-        album = result.scalar_one_or_none()
+        result_album = await self.db.execute(stmt_album)
+        album = result_album.scalar_one_or_none()
 
         if not album:
             raise HTTPException(status_code=404, detail="Album not found")
 
-        # 2. Load the canonical track UUIDs
-        stmt_canonical_track_uuids = (
-            select(TrackAlbumBridge.track_uuid)
+        # 2. Load only the canonical tracks
+        stmt_tracks = (
+            select(Track)
+            .join(TrackAlbumBridge, Track.track_uuid == TrackAlbumBridge.track_uuid)
             .where(
                 TrackAlbumBridge.album_uuid == album_uuid,
                 TrackAlbumBridge.canonical_first.is_(True),
             )
+            .order_by(TrackAlbumBridge.track_number.asc())
         )
-        result_canonical = await self.db.execute(stmt_canonical_track_uuids)
-        canonical_track_uuids = {row[0] for row in result_canonical.all()}
 
-        # 3. Now **replace album.tracks** with filtered list
-        album.tracks = [
-            track for track in album.tracks
-            if track.track_uuid in canonical_track_uuids
-        ]
+        result_tracks = await self.db.execute(stmt_tracks)
+        canonical_tracks = result_tracks.scalars().all()
 
-        # 4. Load tag counts
+        # 3. Assign the canonical tracks manually
+        album.tracks = canonical_tracks
+
+        # 4. Load tag counts separately
         tag_counts_result = await self.db.execute(
             select(AlbumTagBridge.tag_uuid, AlbumTagBridge.count)
             .where(AlbumTagBridge.album_uuid == album_uuid)
         )
         tag_counts = dict(tag_counts_result.all())
 
-        # 5. Validate
+        # 5. Validate album into pydantic
         album_read = AlbumRead.model_validate(album)
 
-        # 6. Overwrite tag counts
+        # 6. Overwrite tag counts into the tags
         album_read.tags = [
             TagBase(
                 tag_uuid=tag.tag_uuid,
