@@ -19,8 +19,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Create materialized view
-    op.execute("""DROP MATERIALIZED VIEW IF EXISTS album_tag_genre_style_fingerprint;""")
-    op.execute("""DROP MATERIALIZED VIEW IF EXISTS artist_album_tag_fingerprint;""")
+    op.execute("""DROP MATERIALIZED VIEW IF EXISTS album_tag_genre_style_fingerprint CASCADE;""")
+    op.execute("""DROP MATERIALIZED VIEW IF EXISTS artist_album_tag_fingerprint CASCADE;""")
 
     op.execute("""
     CREATE MATERIALIZED VIEW IF NOT EXISTS album_tag_genre_style_fingerprint AS
