@@ -12,7 +12,7 @@ import sqlmodel
 
 # revision identifiers, used by Alembic.
 revision: str = '8d5b2e7c9a01'
-down_revision: Union[str, None] = '7f3b0d2e89f2'
+down_revision: Union[str, None] = '4a7c5c23d9b8'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -89,8 +89,35 @@ def upgrade() -> None:
         ON album_tag_genre_style_fingerprint (tag_weight);
     """)
 
+# Create artist_album_tag_fingerprint only if it doesn't already exist
+    op.execute("""
+    CREATE MATERIALIZED VIEW IF NOT EXISTS artist_album_tag_fingerprint AS
+    SELECT
+      aab.artist_uuid,
+      atf.album_uuid,
+      alb.title     AS album_title,
+      alb.release_date,
+      atf.tag_uuid,
+      atf.tag_count,
+      atf.tag_weight
+    FROM album_tag_genre_style_fingerprint atf
+    JOIN album alb
+      ON alb.album_uuid = atf.album_uuid
+    JOIN album_artist_bridge aab
+      ON aab.album_uuid = alb.album_uuid;
+    """)
+    op.execute("CREATE INDEX IF NOT EXISTS idx_artist_album_tag_fingerprint_artist_uuid ON artist_album_tag_fingerprint (artist_uuid);")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_artist_album_tag_fingerprint_album_uuid ON artist_album_tag_fingerprint (album_uuid);")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_artist_album_tag_fingerprint_tag_uuid ON artist_album_tag_fingerprint (tag_uuid);")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_artist_album_tag_fingerprint_tag_weight ON artist_album_tag_fingerprint (tag_weight);")
 
 def downgrade() -> None:
+    # Drop materialized views and related indexes
+    op.execute("DROP MATERIALIZED VIEW IF EXISTS artist_album_tag_fingerprint;")
+    op.execute("DROP INDEX IF EXISTS idx_artist_album_tag_fingerprint_artist_uuid;")
+    op.execute("DROP INDEX IF EXISTS idx_artist_album_tag_fingerprint_album_uuid;")
+    op.execute("DROP INDEX IF EXISTS idx_artist_album_tag_fingerprint_tag_uuid;")
+    op.execute("DROP INDEX IF EXISTS idx_artist_album_tag_fingerprint_tag_weight;")
     op.execute("DROP MATERIALIZED VIEW IF EXISTS album_tag_genre_style_fingerprint;")
     op.execute("DROP INDEX IF EXISTS idx_album_tag_genre_style_album_uuid;")
     op.execute("DROP INDEX IF EXISTS idx_album_tag_genre_style_genre_or_style;")
