@@ -19,11 +19,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Create materialized view
+    op.execute("""DROP MATERIALIZED VIEW IF EXISTS album_tag_genre_style_fingerprint;""")
+    op.execute("""DROP MATERIALIZED VIEW IF EXISTS artist_album_tag_fingerprint;""")
+
     op.execute("""
     CREATE MATERIALIZED VIEW IF NOT EXISTS album_tag_genre_style_fingerprint AS
     WITH mapped_tags AS (
         SELECT 
             atb.album_uuid,
+            tgm.tag_uuid,
             tgm.genre_name,
             tgm.style_name,
             atb.count AS tag_count
@@ -63,6 +67,7 @@ def upgrade() -> None:
     )
     SELECT
         cc.album_uuid,
+        cc.tag_uuid,
         cc.genre_or_style,
         cc.type,
         cc.total_count AS tag_count,
