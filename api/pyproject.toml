@@ -28,6 +28,9 @@ sse-starlette = "^2.2.1"
 httpx = "^0.28.1"
 requests-oauthlib = "^2.0.0"
 rapidfuzz = "^3.13.0"
+scipy = "^1.15.2"
+umap = "^0.1.1"
+tqdm = "^4.67.1"
 
 [tool.poetry.group.dev.dependencies]
 alembic = "^1.14.0"

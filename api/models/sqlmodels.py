@@ -12,6 +12,23 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID, FLOAT, INTEGER, DATE
 def now_utc_naive():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
+
+class TagGenreMapping(SQLModel, table=True):
+    __tablename__ = "tag_genre_mapping"
+    __table_args__ = {"info": {"skip_autogenerate": True}}
+
+    tag_uuid: UUID = Field(primary_key=True)
+    genre_name: Optional[str] = Field(nullable=False)
+    style_name: Optional[str] = Field(nullable=False)
+
+
+class AlbumUMAPEmbedding(SQLModel, table=True):
+    __tablename__ = "album_umap_embedding"
+
+    album_uuid: UUID = Field(primary_key=True)
+    x: float = Field(sa_column=Field(sa_column_kwargs={"type_": FLOAT, "nullable": False}))
+    y: float = Field(sa_column=Field(sa_column_kwargs={"type_": FLOAT, "nullable": False}))
+
 class RefreshToken(SQLModel, table=True):
     __tablename__ = "refresh_token"
     refresh_token_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -22,6 +39,12 @@ class RefreshToken(SQLModel, table=True):
         sa_column_kwargs={"server_default": func.now()}
     )
     revoked: bool = Field(default=False)
+
+class FlexibleTagMapping(SQLModel, table=True):
+    __tablename__ = "flexible_tag_mapping"
+
+    from_tag_uuid: UUID = Field(foreign_key="tag.tag_uuid", primary_key=True)
+    to_tag_uuid: UUID = Field(foreign_key="tag.tag_uuid", primary_key=True)
 
 
 class SearchIndex(SQLModel, table=True):
@@ -35,18 +58,33 @@ class SearchIndex(SQLModel, table=True):
         sa_column=Column("search_vector", TSVECTOR)
     )
 
-class AlbumTagFingerprint(SQLModel, table=True):
-    __tablename__ = "album_tag_fingerprint"
+class AlbumTagGenreStyleFingerprint(SQLModel, table=True):
+    __tablename__ = "album_tag_genre_style_fingerprint"
     __table_args__ = {"info": {"skip_autogenerate": True}}
 
-    album_uuid: UUID = Field(
-        sa_column=Column("album_uuid", PGUUID(as_uuid=True), primary_key=True)
+    album_uuid: UUID = Field(primary_key=True)
+
+    genre_or_style: str = Field(
+        primary_key=True
     )
-    tag_uuid: UUID = Field(
-        sa_column=Column("tag_uuid", PGUUID(as_uuid=True), primary_key=True)
+    type: str = Field(
+        sa_column=Column("type", nullable=False)
     )
     tag_count: int = Field(
         sa_column=Column("tag_count", INTEGER, nullable=False)
+    )
+    tag_weight: float = Field(
+        sa_column=Column("tag_weight", FLOAT, nullable=False)
+    )
+
+
+class AlbumFeatureSparse(SQLModel, table=True):
+    __tablename__ = "album_feature_sparse"
+    __table_args__ = {"info": {"skip_autogenerate": True}}
+
+    album_uuid: UUID = Field(primary_key=True)
+    feature_index: int = Field(
+        sa_column=Column("feature_index", INTEGER, primary_key=True)
     )
     tag_weight: float = Field(
         sa_column=Column("tag_weight", FLOAT, nullable=False)
@@ -319,7 +357,7 @@ class TrackAlbumBridge(SQLModel, table=True):
     track_uuid: UUID = Field(foreign_key="track.track_uuid", primary_key=True)
     album_uuid: UUID = Field(foreign_key="album.album_uuid", primary_key=True)
     track_number: Optional[str] = Field(default=None, nullable=True)
-    canonical_first: Optional[bool] = Field(default=False, nullable=False)
+    canonical_first: Optional[bool] = Field(default=False, nullable=False, sa_column_kwargs={"server_default": None})
 
 
 class Album(SQLModel, table=True):
