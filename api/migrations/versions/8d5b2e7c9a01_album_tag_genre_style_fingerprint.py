@@ -38,6 +38,7 @@ def upgrade() -> None:
     genre_counts AS (
         SELECT 
             album_uuid,
+            tag_uuid,
             genre_name AS genre_or_style,
             'genre' AS type,
             SUM(tag_count) AS total_count
@@ -48,6 +49,7 @@ def upgrade() -> None:
     style_counts AS (
         SELECT 
             album_uuid,
+            tag_uuid,
             style_name AS genre_or_style,
             'style' AS type,
             SUM(tag_count) AS total_count

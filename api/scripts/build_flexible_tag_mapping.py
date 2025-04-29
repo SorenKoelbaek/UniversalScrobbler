@@ -36,8 +36,7 @@ async def build_flexible_mappings(session: AsyncSession):
         text("""
             SELECT tag_uuid, name
             FROM tag
-            WHERE name LIKE '%;%' OR name LIKE '%/%' OR name LIKE '%:%' 
-                  OR name LIKE '% and %' OR name LIKE '%&%' OR name LIKE '%&amp;%'
+            WHERE name LIKE '%;%' OR name LIKE '%/%' OR name LIKE '%:%'
         """)
     )
     complex_tags = result.all()
@@ -46,7 +45,7 @@ async def build_flexible_mappings(session: AsyncSession):
 
     for from_uuid, name in complex_tags:
         # Split by known delimiters
-        parts = re.split(r";|/|:| and |&|&amp;", name)
+        parts = re.split(r";|/|:", name)
         parts = [p.strip() for p in parts if p.strip()]
 
         for part in parts:
