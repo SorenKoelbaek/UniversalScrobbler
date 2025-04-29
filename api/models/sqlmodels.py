@@ -19,15 +19,15 @@ class TagStyleMatch(SQLModel, table=True):
 
 class Style(SQLModel, table=True):
     __tablename__ = "style"
-    style_uuid: str = Field(primary_key=True)
+    style_uuid: UUID = Field(primary_key=True)
     style_name: str
     style_description: str
-    style_parent_uuid: Optional[str] = Field(default=None, foreign_key="style.style_uuid")
+    style_parent_uuid: Optional[UUID] = Field(default=None, foreign_key="style.style_uuid")
 
 class StyleStyleMapping(SQLModel, table=True):
     __tablename__ = "style_style_mapping"
-    from_style_uuid: str = Field(foreign_key="style.style_uuid", primary_key=True)
-    to_style_uuid: str = Field(foreign_key="style.style_uuid", primary_key=True)
+    from_style_uuid: UUID = Field(foreign_key="style.style_uuid", primary_key=True)
+    to_style_uuid: UUID = Field(foreign_key="style.style_uuid", primary_key=True)
 
 class TagGenreMapping(SQLModel, table=True):
     __tablename__ = "tag_genre_mapping"
@@ -73,15 +73,14 @@ class AlbumTagGenreStyleFingerprint(SQLModel, table=True):
     __table_args__ = {"info": {"skip_autogenerate": True}}
 
     album_uuid: UUID = Field(primary_key=True)
+    tag_uuid: UUID = Field(primary_key=True)
+    style_name: str = Field(primary_key=True)
 
-    genre_or_style: str = Field(
-        primary_key=True
-    )
-    type: str = Field(
-        sa_column=Column("type", nullable=False)
-    )
     tag_count: int = Field(
         sa_column=Column("tag_count", INTEGER, nullable=False)
+    )
+    total_count: int = Field(
+        sa_column=Column("total_count", INTEGER, nullable=False)
     )
     tag_weight: float = Field(
         sa_column=Column("tag_weight", FLOAT, nullable=False)
