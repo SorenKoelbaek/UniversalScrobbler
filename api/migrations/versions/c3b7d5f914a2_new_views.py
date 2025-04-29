@@ -11,16 +11,15 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # Drop old materialized views
-    op.execute("""DROP MATERIALIZED VIEW IF EXISTS artist_album_tag_fingerprint CASCADE;""")
-    op.execute("""DROP MATERIALIZED VIEW IF EXISTS album_tag_genre_style_fingerprint CASCADE;""")
+    op.execute("DROP MATERIALIZED VIEW IF EXISTS artist_album_tag_fingerprint CASCADE;")
+    op.execute("DROP MATERIALIZED VIEW IF EXISTS album_tag_genre_style_fingerprint CASCADE;")
 
-    # Create new materialized view
+    # Create new materialized view (with corrected weighting logic)
     op.execute("""
     CREATE MATERIALIZED VIEW album_tag_genre_style_fingerprint AS
     WITH direct_styles AS (
         SELECT
             atb.album_uuid,
-            atb.tag_uuid,
             tsm.style_uuid,
             atb.count AS tag_count
         FROM album_tag_bridge atb
@@ -30,7 +29,6 @@ def upgrade() -> None:
     parent_styles AS (
         SELECT
             ds.album_uuid,
-            ds.tag_uuid,
             ssm.from_style_uuid AS style_uuid,
             ds.tag_count
         FROM direct_styles ds
@@ -42,28 +40,31 @@ def upgrade() -> None:
         UNION ALL
         SELECT * FROM parent_styles
     ),
+    album_style_weights AS (
+        SELECT
+            as1.album_uuid,
+            s.style_name,
+            SUM(as1.tag_count) AS tag_count
+        FROM all_styles as1
+        JOIN style s ON as1.style_uuid = s.style_uuid
+        GROUP BY as1.album_uuid, s.style_name
+    ),
     style_totals AS (
         SELECT
             album_uuid,
-            style_uuid,
             SUM(tag_count) AS total_count
-        FROM all_styles
-        GROUP BY album_uuid, style_uuid
+        FROM album_style_weights
+        GROUP BY album_uuid
     )
     SELECT
-        as1.album_uuid,
-        as1.tag_uuid,
-        s.style_name,
-        SUM(as1.tag_count) AS tag_count,
+        aw.album_uuid,
+        aw.style_name,
+        aw.tag_count,
         st.total_count,
-        (SUM(as1.tag_count) * 1.0 / st.total_count) AS tag_weight
-    FROM all_styles as1
-    JOIN style s
-        ON as1.style_uuid = s.style_uuid
+        (aw.tag_count * 1.0 / st.total_count) AS tag_weight
+    FROM album_style_weights aw
     JOIN style_totals st
-        ON as1.album_uuid = st.album_uuid
-       AND as1.style_uuid = st.style_uuid
-    GROUP BY as1.album_uuid, as1.tag_uuid, s.style_name, st.total_count;
+      ON aw.album_uuid = st.album_uuid;
     """)
 
     # Create indexes
@@ -88,7 +89,7 @@ def upgrade() -> None:
         atf.album_uuid,
         alb.title AS album_title,
         alb.release_date,
-        atf.tag_uuid,
+        atf.style_name,
         atf.tag_count,
         atf.tag_weight
     FROM album_tag_genre_style_fingerprint atf
@@ -108,8 +109,8 @@ def upgrade() -> None:
         ON artist_album_tag_fingerprint (album_uuid);
     """)
     op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_artist_album_tag_fingerprint_tag_uuid
-        ON artist_album_tag_fingerprint (tag_uuid);
+        CREATE INDEX IF NOT EXISTS idx_artist_album_tag_fingerprint_style_name
+        ON artist_album_tag_fingerprint (style_name);
     """)
     op.execute("""
         CREATE INDEX IF NOT EXISTS idx_artist_album_tag_fingerprint_tag_weight
@@ -117,12 +118,12 @@ def upgrade() -> None:
     """)
 
 def downgrade() -> None:
-    op.execute("DROP MATERIALIZED VIEW IF EXISTS artist_album_tag_fingerprint CASCADE;")
-    op.execute("DROP MATERIALIZED VIEW IF EXISTS album_tag_genre_style_fingerprint CASCADE;")
+    op.execute("DROP MATERIALIZED VIEW IF EXISTS artist_album_tag_fingerprint;")
+    op.execute("DROP MATERIALIZED VIEW IF EXISTS album_tag_genre_style_fingerprint;")
     op.execute("DROP INDEX IF EXISTS idx_album_tag_genre_style_album_uuid;")
     op.execute("DROP INDEX IF EXISTS idx_album_tag_genre_style_style_name;")
     op.execute("DROP INDEX IF EXISTS idx_album_tag_genre_style_tag_weight;")
     op.execute("DROP INDEX IF EXISTS idx_artist_album_tag_fingerprint_artist_uuid;")
     op.execute("DROP INDEX IF EXISTS idx_artist_album_tag_fingerprint_album_uuid;")
-    op.execute("DROP INDEX IF EXISTS idx_artist_album_tag_fingerprint_tag_uuid;")
+    op.execute("DROP INDEX IF EXISTS idx_artist_album_tag_fingerprint_style_name;")
     op.execute("DROP INDEX IF EXISTS idx_artist_album_tag_fingerprint_tag_weight;")
