@@ -24,59 +24,66 @@ def upgrade() -> None:
 
     op.execute("""
     CREATE MATERIALIZED VIEW IF NOT EXISTS album_tag_genre_style_fingerprint AS
-    WITH mapped_tags AS (
-        SELECT 
-            atb.album_uuid,
-            tgm.tag_uuid,
-            tgm.genre_name,
-            tgm.style_name,
-            atb.count AS tag_count
-        FROM album_tag_bridge atb
-        INNER JOIN tag_genre_mapping tgm
-          ON atb.tag_uuid = tgm.tag_uuid
-    ),
-    genre_counts AS (
-        SELECT 
-            album_uuid,
-            tag_uuid,
-            genre_name AS genre_or_style,
-            'genre' AS type,
-            SUM(tag_count) AS total_count
-        FROM mapped_tags
-        WHERE genre_name IS NOT NULL
-        GROUP BY album_uuid, genre_name
-    ),
-    style_counts AS (
-        SELECT 
-            album_uuid,
-            tag_uuid,
-            style_name AS genre_or_style,
-            'style' AS type,
-            SUM(tag_count) AS total_count
-        FROM mapped_tags
-        WHERE style_name IS NOT NULL
-        GROUP BY album_uuid, style_name
-    ),
-    combined_counts AS (
-        SELECT * FROM genre_counts
-        UNION ALL
-        SELECT * FROM style_counts
-    ),
-    album_totals AS (
-        SELECT album_uuid, SUM(total_count) AS total_count
-        FROM combined_counts
-        GROUP BY album_uuid
-    )
-    SELECT
-        cc.album_uuid,
-        cc.tag_uuid,
-        cc.genre_or_style,
-        cc.type,
-        cc.total_count AS tag_count,
-        cc.total_count * 1.0 / at.total_count AS tag_weight
-    FROM combined_counts cc
-    JOIN album_totals at ON cc.album_uuid = at.album_uuid;
-    """)
+WITH mapped_tags AS (
+    SELECT 
+        atb.album_uuid,
+        atb.tag_uuid,
+        tgm.genre_name,
+        tgm.style_name,
+        atb.count AS tag_count
+    FROM album_tag_bridge atb
+    INNER JOIN tag_genre_mapping tgm
+        ON atb.tag_uuid = tgm.tag_uuid
+),
+genre_tags AS (
+    SELECT 
+        album_uuid,
+        tag_uuid,
+        genre_name AS genre_or_style,
+        'genre' AS type,
+        SUM(tag_count) AS tag_count
+    FROM mapped_tags
+    WHERE genre_name IS NOT NULL
+    GROUP BY album_uuid, tag_uuid, genre_name
+),
+style_tags AS (
+    SELECT 
+        album_uuid,
+        tag_uuid,
+        style_name AS genre_or_style,
+        'style' AS type,
+        SUM(tag_count) AS tag_count
+    FROM mapped_tags
+    WHERE style_name IS NOT NULL
+    GROUP BY album_uuid, tag_uuid, style_name
+),
+combined_tags AS (
+    SELECT * FROM genre_tags
+    UNION ALL
+    SELECT * FROM style_tags
+),
+genre_style_totals AS (
+    SELECT 
+        album_uuid,
+        genre_or_style,
+        type,
+        SUM(tag_count) AS total_count
+    FROM combined_tags
+    GROUP BY album_uuid, genre_or_style, type
+)
+SELECT
+    ct.album_uuid,
+    ct.tag_uuid,
+    ct.genre_or_style,
+    ct.type,
+    ct.tag_count,
+    ct.tag_count * 1.0 / gst.total_count AS tag_weight
+FROM combined_tags ct
+JOIN genre_style_totals gst
+  ON ct.album_uuid = gst.album_uuid
+ AND ct.genre_or_style = gst.genre_or_style
+ AND ct.type = gst.type;
+""")
 
     # Create indexes
     op.execute("""
