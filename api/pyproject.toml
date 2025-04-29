@@ -31,6 +31,9 @@ rapidfuzz = "^3.13.0"
 scipy = "^1.15.2"
 umap = "^0.1.1"
 tqdm = "^4.67.1"
+sentence-transformers = "^4.1.0"
+scikit-learn = "^1.6.1"
+nltk = "^3.9.1"
 
 [tool.poetry.group.dev.dependencies]
 alembic = "^1.14.0"

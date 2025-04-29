@@ -12,6 +12,22 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID, FLOAT, INTEGER, DATE
 def now_utc_naive():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
+class TagStyleMatch(SQLModel, table=True):
+    __tablename__ = "tag_style_match"
+    tag_uuid: UUID = Field(primary_key=True)
+    style_uuid: UUID= Field(primary_key=True)
+
+class Style(SQLModel, table=True):
+    __tablename__ = "style"
+    style_uuid: str = Field(primary_key=True)
+    style_name: str
+    style_description: str
+    style_parent_uuid: Optional[str] = Field(default=None, foreign_key="style.style_uuid")
+
+class StyleStyleMapping(SQLModel, table=True):
+    __tablename__ = "style_style_mapping"
+    from_style_uuid: str = Field(foreign_key="style.style_uuid", primary_key=True)
+    to_style_uuid: str = Field(foreign_key="style.style_uuid", primary_key=True)
 
 class TagGenreMapping(SQLModel, table=True):
     __tablename__ = "tag_genre_mapping"
@@ -39,12 +55,6 @@ class RefreshToken(SQLModel, table=True):
         sa_column_kwargs={"server_default": func.now()}
     )
     revoked: bool = Field(default=False)
-
-class FlexibleTagMapping(SQLModel, table=True):
-    __tablename__ = "flexible_tag_mapping"
-
-    from_tag_uuid: UUID = Field(foreign_key="tag.tag_uuid", primary_key=True)
-    to_tag_uuid: UUID = Field(foreign_key="tag.tag_uuid", primary_key=True)
 
 
 class SearchIndex(SQLModel, table=True):
