@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from datetime import datetime, date
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, FLOAT, INTEGER, DATE
+from pgvector.sqlalchemy import Vector
 
 def now_utc_naive():
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -37,7 +38,13 @@ class TagGenreMapping(SQLModel, table=True):
     genre_name: Optional[str] = Field(nullable=False)
     style_name: Optional[str] = Field(nullable=False)
 
+class AlbumGraphEmbedding(SQLModel, table=True):
+    __tablename__ = "album_graph_embedding"
 
+    album_uuid: UUID = Field(primary_key=True)
+    embedding: List[float] = Field(
+        sa_column=Column(Vector(128), nullable=False)
+    )
 class AlbumUMAPEmbedding(SQLModel, table=True):
     __tablename__ = "album_umap_embedding"
 
@@ -74,26 +81,13 @@ class AlbumTagGenreStyleFingerprint(SQLModel, table=True):
 
     album_uuid: UUID = Field(primary_key=True)
     tag_uuid: UUID = Field(primary_key=True)
-    style_name: str = Field(primary_key=True)
+    style_uuid: UUID = Field(primary_key=True)
 
     tag_count: int = Field(
         sa_column=Column("tag_count", INTEGER, nullable=False)
     )
     total_count: int = Field(
         sa_column=Column("total_count", INTEGER, nullable=False)
-    )
-    tag_weight: float = Field(
-        sa_column=Column("tag_weight", FLOAT, nullable=False)
-    )
-
-
-class AlbumFeatureSparse(SQLModel, table=True):
-    __tablename__ = "album_feature_sparse"
-    __table_args__ = {"info": {"skip_autogenerate": True}}
-
-    album_uuid: UUID = Field(primary_key=True)
-    feature_index: int = Field(
-        sa_column=Column("feature_index", INTEGER, primary_key=True)
     )
     tag_weight: float = Field(
         sa_column=Column("tag_weight", FLOAT, nullable=False)
@@ -114,8 +108,8 @@ class ArtistAlbumTagFingerprint(SQLModel, table=True):
     release_date: date = Field(
         sa_column=Column("release_date", DATE, nullable=False)
     )
-    tag_uuid: UUID = Field(
-        sa_column=Column("tag_uuid", PGUUID(as_uuid=True), primary_key=True)
+    style_uuid: UUID = Field(
+        sa_column=Column("style_uuid", PGUUID(as_uuid=True), primary_key=True)
     )
     tag_count: int = Field(
         sa_column=Column("tag_count", INTEGER, nullable=False)
