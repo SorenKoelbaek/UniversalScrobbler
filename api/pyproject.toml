@@ -37,6 +37,7 @@ nltk = "^3.9.1"
 pgvector = "^0.4.1"
 torch-geometric = "^2.6.1"
 torch = "2.6.0"
+mmh3 = "^5.1.0"
 
 [tool.poetry.group.dev.dependencies]
 alembic = "^1.14.0"

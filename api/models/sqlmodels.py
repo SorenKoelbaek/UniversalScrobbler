@@ -3,7 +3,7 @@ from sqlalchemy import func
 from typing import Optional, List
 from datetime import datetime, UTC,  timezone
 from sqlalchemy import BigInteger, Column, String
-
+from typing import Annotated
 from uuid import UUID, uuid4
 from datetime import datetime, date
 from sqlalchemy.dialects.postgresql import TSVECTOR
@@ -38,19 +38,17 @@ class TagGenreMapping(SQLModel, table=True):
     genre_name: Optional[str] = Field(nullable=False)
     style_name: Optional[str] = Field(nullable=False)
 
-class AlbumGraphEmbedding(SQLModel, table=True):
-    __tablename__ = "album_graph_embedding"
 
-    album_uuid: UUID = Field(primary_key=True)
-    embedding: List[float] = Field(
-        sa_column=Column(Vector(128), nullable=False)
-    )
-class AlbumUMAPEmbedding(SQLModel, table=True):
-    __tablename__ = "album_umap_embedding"
+class AlbumVector(SQLModel, table=True):
+    __tablename__ = "album_vector"
 
-    album_uuid: UUID = Field(primary_key=True)
-    x: float = Field(sa_column=Field(sa_column_kwargs={"type_": FLOAT, "nullable": False}))
-    y: float = Field(sa_column=Field(sa_column_kwargs={"type_": FLOAT, "nullable": False}))
+    album_uuid: UUID = Field(primary_key=True, index=True)
+
+    artist_vector: List[float] = Field(sa_column=Column(Vector(512), nullable=False))
+    year_vector: List[float] = Field(sa_column=Column(Vector(1), nullable=False))
+    type_vector: List[float] = Field(sa_column=Column(Vector(17), nullable=False))
+    style_vector: List[float] = Field(sa_column=Column(Vector(5478), nullable=False))
+    style_vector_reduced: List[float] = Field(sa_column=Column(Vector(1024), nullable=True))
 
 class RefreshToken(SQLModel, table=True):
     __tablename__ = "refresh_token"

@@ -304,3 +304,10 @@ class PlaybackUpdatePayload(BaseModel):
 class websocketMessage(BaseModel):
     type: Optional[str]
     payload: Optional[dict]
+
+class AlbumFindSimilarRequest(BaseModel):
+    albums: List[UUID]
+    years: Optional[List[int]] = None
+    artists: Optional[List[UUID]] = None
+    styles: Optional[List[UUID]] = None
+    types: Optional[List[UUID]] = None

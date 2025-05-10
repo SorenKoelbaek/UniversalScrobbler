@@ -3,6 +3,7 @@ import sys
 import asyncio
 from uuid import UUID
 from collections import defaultdict
+import logging
 
 import torch
 import torch.nn.functional as F
@@ -22,6 +23,10 @@ if project_root not in sys.path:
 from dependencies.database import get_async_session
 from models.sqlmodels import AlbumGraphEmbedding
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("embedding")
+
 class GraphSAGE(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels):
         super().__init__()
@@ -35,16 +40,23 @@ class GraphSAGE(nn.Module):
         return x
 
 async def load_graph_data(session: AsyncSession):
-    print("📥 Loading all album style fingerprints...")
+    logger.info("📥 Loading all album style fingerprints...")
     result = await session.stream(text("SELECT album_uuid, style_uuid, tag_weight FROM album_tag_genre_style_fingerprint"))
     style_rows = []
     async for row in result:
         style_rows.append(row)
 
+    logger.info("📥 Loading style hierarchy...")
+    style_hierarchy_result = await session.execute(text("SELECT from_style_uuid, to_style_uuid FROM style_style_mapping"))
+    child_to_parents = defaultdict(set)
+    for from_uuid, to_uuid in style_hierarchy_result.fetchall():
+        child_to_parents[str(from_uuid)].add(str(to_uuid))
+
+    logger.info("📥 Loading album release dates...")
     release_result = await session.execute(text("SELECT album_uuid, release_date FROM album WHERE release_date IS NOT NULL"))
     release_dates = dict(release_result.fetchall())
 
-    print("📥 Loading all artist–album edges...")
+    logger.info("📥 Loading artist–album edges...")
     artist_result = await session.stream(text("""
         SELECT artist_uuid, album_uuid
         FROM album_artist_bridge
@@ -56,30 +68,30 @@ async def load_graph_data(session: AsyncSession):
     async for row in artist_result:
         artist_links.append((row[0], row[1]))
 
-    print("📥 Loading all style–style edges...")
-    style_edge_result = await session.stream(text("SELECT from_style_uuid, to_style_uuid FROM style_style_mapping"))
-    style_edges = []
-    async for row in style_edge_result:
-        style_edges.append((row[0], row[1]))
-
     style_set = {style_uuid for _, style_uuid, _ in style_rows}
-    style_list = sorted(style_set)
+    for _, style_uuid, _ in style_rows:
+        style_set.update(child_to_parents.get(str(style_uuid), set()))
+
+    style_list = sorted(style_set, key=str)
     style_to_idx = {str(s): i for i, s in enumerate(style_list)}
     num_styles = len(style_list)
+    logger.info(f"📊 Number of styles (after flattening): {num_styles}")
 
     album_features = defaultdict(lambda: torch.zeros(num_styles + 1))
     for album_uuid, style_uuid, tag_weight in style_rows:
         idx = style_to_idx[str(style_uuid)]
-        album_features[album_uuid][idx] = float(tag_weight)
+        album_features[album_uuid][idx] += float(tag_weight)
+        for parent_uuid in child_to_parents.get(str(style_uuid), []):
+            parent_idx = style_to_idx[parent_uuid]
+            album_features[album_uuid][parent_idx] += float(tag_weight)
 
     for album_uuid, date_obj in release_dates.items():
         year = date_obj.year if date_obj else 1900
-        album_features[album_uuid][-1] = year / 2550.0
+        album_features[album_uuid][-1] = year / 2550.0  # Normalize year
 
     album_uuids = set(album_features.keys())
     artist_uuids = {a for a, _ in artist_links}
-    style_uuids = style_set | {s for pair in style_edges for s in pair}
-    all_uuids = list(artist_uuids | album_uuids | style_uuids)
+    all_uuids = list(artist_uuids | album_uuids)
     uuid_to_idx = {str(u): i for i, u in enumerate(all_uuids)}
     idx_to_album = {uuid_to_idx[str(a)]: a for a in album_uuids}
 
@@ -92,12 +104,10 @@ async def load_graph_data(session: AsyncSession):
     edge_index = []
     for artist_uuid, album_uuid in artist_links:
         edge_index.append([uuid_to_idx[str(artist_uuid)], uuid_to_idx[str(album_uuid)]])
-    for album_uuid, style_uuid, _ in style_rows:
-        edge_index.append([uuid_to_idx[str(album_uuid)], uuid_to_idx[str(style_uuid)]])
-    for from_uuid, to_uuid in style_edges:
-        edge_index.append([uuid_to_idx[str(from_uuid)], uuid_to_idx[str(to_uuid)]])
 
     edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+    logger.info(f"🔗 Constructed graph with {num_nodes} nodes and {edge_index.size(1)} edges.")
+
     return Data(x=x, edge_index=edge_index), idx_to_album, uuid_to_idx
 
 async def train_and_store(session: AsyncSession):
@@ -106,7 +116,7 @@ async def train_and_store(session: AsyncSession):
     model = GraphSAGE(data.num_node_features, 64, 128)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.005, weight_decay=5e-4)
 
-    print("🧠 Training GraphSAGE on full graph...")
+    logger.info("🧠 Training GraphSAGE on full graph...")
     loader = NeighborLoader(data, input_nodes=None, num_neighbors=[25, 10], batch_size=2048, shuffle=True)
     model.train()
     for epoch in range(10):
@@ -118,22 +128,24 @@ async def train_and_store(session: AsyncSession):
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        print(f"Epoch {epoch:02d} | Loss: {total_loss:.4f}")
+        logger.info(f"📈 Epoch {epoch:02d} | Loss: {total_loss:.4f}")
 
-    print("💾 Inference and saving embeddings in batches...")
+    logger.info("💾 Inference and saving embeddings in batches...")
     model.eval()
-    album_indices = list(idx_to_album.keys())
-    batch_size = 4096
     await session.execute(text("TRUNCATE TABLE album_graph_embedding;"))
 
     with torch.no_grad():
-        all_embeddings = model(data.x, data.edge_index)
-        for idx, album_uuid in idx_to_album.items():
-            emb = all_embeddings[idx].tolist()
-            session.add(AlbumGraphEmbedding(album_uuid=album_uuid, embedding=emb))
+        input_nodes = list(idx_to_album.keys())
+        infer_loader = NeighborLoader(data, input_nodes=input_nodes, num_neighbors=[25, 10], batch_size=1024, shuffle=False)
 
-        await session.commit()
-        print(f"✅ Stored {len(idx_to_album)} album embeddings.")
+        for batch in infer_loader:
+            batch_emb = model(batch.x, batch.edge_index)
+            for i, nid in enumerate(batch.n_id.tolist()):
+                if nid in idx_to_album:
+                    album_uuid = idx_to_album[nid]
+                    session.add(AlbumGraphEmbedding(album_uuid=album_uuid, embedding=batch_emb[i].tolist()))
+            await session.commit()
+            logger.info(f"✅ Saved embeddings for batch of size {batch.batch_size}")
 
 async def main():
     async for session in get_async_session():

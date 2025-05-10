@@ -1,28 +1,35 @@
 from collections import defaultdict
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import text
-from redis.commands.search import Search
 from sqlalchemy import func
-from sqlmodel import select, or_, exists
+from sqlmodel import select, cast
 from pydantic import BaseModel, TypeAdapter
-from sqlalchemy.orm import selectinload, contains_eager, with_loader_criteria
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge, TrackVersion, TrackVersionTagBridge, \
     ArtistTagBridge, TrackAlbumBridge, AlbumArtistBridge, SearchIndex, ScrobbleResolutionIndex, \
     ScrobbleResolutionSearchIndex
-from models.appmodels import AlbumRead, ArtistRead, TrackRead, TagBase, PaginatedResponse, ArtistBase, TrackReadSimple
+from models.appmodels import AlbumRead, ArtistRead, TrackRead, TagBase, PaginatedResponse, ArtistBase, TrackReadSimple, \
+    AlbumFindSimilarRequest
 from uuid import UUID
 from fastapi import HTTPException
-from typing import List, Optional
+from typing import List, Optional, Set
 import logging
 logger = logging.getLogger(__name__)
 from dependencies.musicbrainz_api import MusicBrainzAPI
-from services.musicbrainz_service import MusicBrainzService
+
 import re
 from rapidfuzz import fuzz
-from datetime import datetime
+import numpy as np
 
 musicbrainz_api = MusicBrainzAPI()
 
+SIMILARITY_WEIGHTS = {
+    "style": 0.4,
+    "artist": 0.3,
+    "type": 0.2,
+    "year": 0.1,
+}
 
 def rank_album_preference(album, expected_title: str):
     title = (album.title or "").lower()
@@ -49,6 +56,70 @@ def rank_album_preference(album, expected_title: str):
 class MusicService:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def find_similar_albums(
+        self,
+        request: AlbumFindSimilarRequest,
+        limit: int = 50
+    ) -> PaginatedResponse[AlbumRead]:
+        album_uuids: List[UUID] = request.albums
+        if not album_uuids:
+            raise ValueError("At least one album UUID must be provided")
+
+        # Main similarity SQL: for each candidate album, get MAX score to any input album
+        # Weight: style (0.4), artist (0.3), type (0.2), year (0.1), year uses Euclidean
+        sql = text("""
+            SELECT
+                target.album_uuid,
+                MAX(
+                    0.4 * (1 - (target.style_vector <=> seed.style_vector)) +
+                    0.3 * (1 - (target.artist_vector <=> seed.artist_vector)) +
+                    0.2 * (1 - (target.type_vector <=> seed.type_vector)) +
+                    0.1 * (1 / (1 + (target.year_vector <-> seed.year_vector)))
+                ) AS score
+            FROM album_vector AS target
+            JOIN album_vector AS seed ON seed.album_uuid = ANY(:seed_ids)
+            WHERE target.album_uuid != ALL(:seed_ids)
+            GROUP BY target.album_uuid
+            ORDER BY score DESC
+            LIMIT :limit
+        """)
+
+        result = await self.db.execute(sql, {"seed_ids": album_uuids, "limit": limit * 2})
+        rows = result.fetchall()
+
+        # Extract just the UUIDs
+        result_ids = [row[0] for row in rows]
+
+        if not result_ids:
+            return PaginatedResponse(total=0, offset=0, limit=limit, items=[])
+
+        # Fetch matching albums
+        stmt = (
+            select(Album)
+            .where(Album.album_uuid.in_(result_ids))
+            .options(
+                selectinload(Album.artists),
+                selectinload(Album.tracks),
+                selectinload(Album.tags),
+                selectinload(Album.types),
+                selectinload(Album.releases),
+            )
+        )
+        result = await self.db.execute(stmt)
+        albums = result.scalars().all()
+
+        # Sort again to match score order
+        album_map = {a.album_uuid: a for a in albums}
+        ordered = [album_map[uuid] for uuid in result_ids if uuid in album_map][:limit]
+
+        adapter = TypeAdapter(List[AlbumRead])
+        return PaginatedResponse(
+            total=len(ordered),
+            offset=0,
+            limit=limit,
+            items=adapter.validate_python(ordered)
+        )
 
     async def get_album(self, album_uuid: UUID) -> AlbumRead:
         """Retrieve a single album, filter canonical tracks AFTER model validation."""

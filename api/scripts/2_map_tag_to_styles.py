@@ -1,210 +1,134 @@
 import os
 import sys
 import asyncio
-import re
-import csv
-from typing import Optional
 from uuid import UUID
+from collections import defaultdict
 
-import numpy as np
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import SQLModel, Field
+import torch
+import torch.nn.functional as F
+from torch import nn
+from torch_geometric.data import Data
+from torch_geometric.loader import NeighborLoader
+from torch_geometric.nn import SAGEConv
 from sqlalchemy import text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sklearn.metrics.pairwise import cosine_similarity
-from nltk.stem import WordNetLemmatizer
-import nltk
-from sentence_transformers import SentenceTransformer
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# --- Fix Python paths ---
+# Fix Python paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# --- Setup nltk wordnet path ---
-nltk.data.path.append(os.path.join(script_dir, "wordnet"))
-lemmatizer = WordNetLemmatizer()
-
-# --- Load project-specific modules ---
 from dependencies.database import get_async_session
-from models.sqlmodels import TagStyleMatch
+from models.sqlmodels import AlbumGraphEmbedding
 
-# --- Normalization map support ---
-def load_normalization_map(csv_path: str) -> dict:
-    variant_map = {}
-    try:
-        with open(csv_path, newline='', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                variant = row["variant"].lower()
-                normalized_target = row["normalized"]
-                variant_map[variant] = normalized_target
-    except FileNotFoundError:
-        print(f"⚠️ Normalization CSV not found at {csv_path}, continuing without it.")
-    return variant_map
+class GraphSAGE(nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super().__init__()
+        self.conv1 = SAGEConv(in_channels, hidden_channels)
+        self.conv2 = SAGEConv(hidden_channels, out_channels)
 
-normalization_map = load_normalization_map(os.path.join(script_dir, "normalization.csv"))
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = self.conv2(x, edge_index)
+        return x
 
-def enrich_for_embedding(text: str) -> str:
-    return f"{text} music genre"
+async def load_graph_data(session: AsyncSession):
+    print("📥 Loading all album style fingerprints...")
+    result = await session.stream(text("SELECT album_uuid, style_uuid, tag_weight FROM album_tag_genre_style_fingerprint"))
+    style_rows = []
+    async for row in result:
+        style_rows.append(row)
 
-async def get_eligible_tags(session: AsyncSession):
-    result = await session.execute(
-        text("""
-            WITH tag_aggregates AS (
-                SELECT tag_uuid, COUNT(*) AS uses, 'album' AS bridge_type FROM album_tag_bridge GROUP BY tag_uuid
-                UNION ALL
-                SELECT tag_uuid, COUNT(*) AS uses, 'album_release' FROM album_release_tag_bridge GROUP BY tag_uuid
-                UNION ALL
-                SELECT tag_uuid, COUNT(*) AS uses, 'artist' FROM artist_tag_bridge GROUP BY tag_uuid
-                UNION ALL
-                SELECT tag_uuid, COUNT(*) AS uses, 'track_version' FROM track_version_tag_bridge GROUP BY tag_uuid
-            ),
-            tag_usage_summary AS (
-                SELECT
-                    tag_uuid,
-                    SUM(uses) AS total_uses,
-                    COUNT(DISTINCT bridge_type) AS bridge_type_count
-                FROM
-                    tag_aggregates
-                GROUP BY
-                    tag_uuid
-            )
-            SELECT
-                t.tag_uuid,
-                t.name
-            FROM
-                tag_usage_summary u
-            JOIN
-                tag t ON t.tag_uuid = u.tag_uuid
-            WHERE
-                u.total_uses > 3
-                AND u.bridge_type_count > 1
-        """)
-    )
-    return result.all()
+    release_result = await session.execute(text("SELECT album_uuid, release_date FROM album WHERE release_date IS NOT NULL"))
+    release_dates = dict(release_result.fetchall())
 
-def split_tag_name(tag_name: str):
-    return [p.strip() for p in re.split(r"[;,/:]", tag_name) if p.strip()]
+    print("📥 Loading all artist–album edges...")
+    artist_result = await session.stream(text("""
+        SELECT artist_uuid, album_uuid
+        FROM album_artist_bridge
+        WHERE album_uuid IN (
+            SELECT DISTINCT album_uuid FROM album_tag_genre_style_fingerprint
+        )
+    """))
+    artist_links = []
+    async for row in artist_result:
+        artist_links.append((row[0], row[1]))
 
-async def map_tags_to_styles(session: AsyncSession):
-    matching_criteria = 0.60
-    fallback_criteria = 0.70
-    closeness_criteria = 0.02
+    # Style-to-style edges are intentionally ignored to preserve exact style distributions
 
-    print("✅ Loading tags and styles from database...")
+    style_set = {style_uuid for _, style_uuid, _ in style_rows}
+    style_list = sorted(style_set)
+    style_to_idx = {str(s): i for i, s in enumerate(style_list)}
+    num_styles = len(style_list)
 
-    tags = await get_eligible_tags(session)
+    album_features = defaultdict(lambda: torch.zeros(num_styles + 1))
+    for album_uuid, style_uuid, tag_weight in style_rows:
+        idx = style_to_idx[str(style_uuid)]
+        album_features[album_uuid][idx] = float(tag_weight)
 
-    result = await session.execute(
-        text("SELECT style_uuid, style_name, style_description FROM style")
-    )
-    styles = result.all()
+    for album_uuid, date_obj in release_dates.items():
+        year = date_obj.year if date_obj else 1900
+        album_features[album_uuid][-1] = year / 2550.0
 
-    tag_rows = [(tag_uuid, name.strip()) for tag_uuid, name in tags]
-    style_names = [row[1].strip() for row in styles]
-    style_uuids = [row[0] for row in styles]
-    style_descriptions = [(row[2] or "").strip() for row in styles]
+    album_uuids = set(album_features.keys())
+    artist_uuids = {a for a, _ in artist_links}
+    all_uuids = list(artist_uuids | album_uuids)
+    uuid_to_idx = {str(u): i for i, u in enumerate(all_uuids)}
+    idx_to_album = {uuid_to_idx[str(a)]: a for a in album_uuids}
 
-    # Build clean style name lookup
-    style_name_lower_to_uuid = {name.lower(): uuid for name, uuid in zip(style_names, style_uuids)}
-    raw_styles = dict(zip(style_names, style_uuids))
+    num_nodes = len(all_uuids)
+    x = torch.zeros((num_nodes, num_styles + 1))
+    for album_uuid, vec in album_features.items():
+        idx = uuid_to_idx[str(album_uuid)]
+        x[idx] = vec
 
-    print(f"✅ Loaded {len(tag_rows)} tags and {len(style_names)} styles.")
+    edge_index = []
+    for artist_uuid, album_uuid in artist_links:
+        edge_index.append([uuid_to_idx[str(artist_uuid)], uuid_to_idx[str(album_uuid)]])
 
-    model = SentenceTransformer('all-mpnet-base-v2')
+    edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+    return Data(x=x, edge_index=edge_index), idx_to_album, uuid_to_idx
 
-    # --- Normalize and enrich styles before embedding ---
-    style_texts = [
-        f"{name}. {name}. {description}" if description else f"{name}. {name}"
-        for name, description in zip(style_names, style_descriptions)
-    ]
-    style_embeddings = model.encode(style_texts, normalize_embeddings=True)
+async def train_and_store(session: AsyncSession):
+    data, idx_to_album, uuid_to_idx = await load_graph_data(session)
 
-    batch_parts = []
-    batch_metadata = []
-    matches_to_insert = []
+    model = GraphSAGE(data.num_node_features, 64, 128)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.005, weight_decay=5e-4)
 
-    print("✅ Phase 1: Manual override mapping...")
+    print("🧠 Training GraphSAGE on full graph...")
+    loader = NeighborLoader(data, input_nodes=None, num_neighbors=[25, 10], batch_size=2048, shuffle=True)
+    model.train()
+    for epoch in range(10):
+        total_loss = 0
+        for batch in loader:
+            optimizer.zero_grad()
+            out = model(batch.x, batch.edge_index)
+            loss = out.norm(p=2).mean()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        print(f"Epoch {epoch:02d} | Loss: {total_loss:.4f}")
 
-    for tag_uuid, tag_name in tag_rows:
-        raw_tag_clean = tag_name.strip()
+    print("💾 Inference and saving embeddings in batches...")
+    model.eval()
+    album_indices = list(idx_to_album.keys())
+    batch_size = 4096
+    await session.execute(text("TRUNCATE TABLE album_graph_embedding;"))
 
-        # 1. Manual override via normalization.csv
-        normalization_target = normalization_map.get(raw_tag_clean)
-        if normalization_target:
-            # 2. Try match normalized_target to style_name exactly (lower for safety)
-            for style_name, style_uuid in raw_styles.items():
-                if normalization_target.lower() == style_name.lower():
-                    matches_to_insert.append(TagStyleMatch(
-                        tag_uuid=str(tag_uuid),
-                        style_uuid=style_uuid
-                    ))
-                    break
-            else:
-                # No manual match found -> fallback
-                split_parts = split_tag_name(tag_name)
-                for part in split_parts:
-                    enriched_part = enrich_for_embedding(part.lower())
-                    batch_parts.append(enriched_part)
-                    batch_metadata.append({
-                        "tag_uuid": str(tag_uuid),
-                        "tag_name": part,
-                    })
-            continue  # Done with this tag (either matched or prepared fallback)
+    with torch.no_grad():
+        all_embeddings = model(data.x, data.edge_index)
+        for idx, album_uuid in idx_to_album.items():
+            emb = all_embeddings[idx].tolist()
+            session.add(AlbumGraphEmbedding(album_uuid=album_uuid, embedding=emb))
 
-        # No normalization, fallback
-        split_parts = split_tag_name(tag_name)
-        for part in split_parts:
-            enriched_part = enrich_for_embedding(part.lower())
-            batch_parts.append(enriched_part)
-            batch_metadata.append({
-                "tag_uuid": str(tag_uuid),
-                "tag_name": part,
-            })
-
-    print(f"✅ {len(matches_to_insert)} direct manual matches found.")
-    print(f"✅ {len(batch_parts)} parts prepared for fallback matching.")
-
-    # Phase 2: Embedding fallback
-    if batch_parts:
-        batch_embeddings = model.encode(batch_parts, normalize_embeddings=True)
-
-        similarities = cosine_similarity(batch_embeddings, style_embeddings)
-
-        for i, scores in enumerate(similarities):
-            best_idx = scores.argmax()
-            best_score = scores[best_idx]
-
-            high_score_indices = np.where((scores >= matching_criteria) & (scores >= best_score - closeness_criteria))[0]
-
-            if len(high_score_indices) > 0:
-                matched_style = style_names[best_idx]
-                style_uuid = raw_styles.get(matched_style)
-                if style_uuid:
-                    matches_to_insert.append(TagStyleMatch(
-                        tag_uuid=batch_metadata[i]["tag_uuid"],
-                        style_uuid=style_uuid
-                    ))
-
-    # Insert matches into database (conflict-safe)
-    if matches_to_insert:
-        values = [{"tag_uuid": m.tag_uuid, "style_uuid": m.style_uuid} for m in matches_to_insert]
-
-        stmt = pg_insert(TagStyleMatch).values(values)
-        stmt = stmt.on_conflict_do_nothing(index_elements=["tag_uuid", "style_uuid"])
-
-        await session.execute(stmt)
         await session.commit()
-
-        print(f"✅ Inserted {len(matches_to_insert)} tag-style matches into the database (conflicts ignored).")
-    else:
-        print(f"⚠️ No tag-style matches found.")
+        print(f"✅ Stored {len(idx_to_album)} album embeddings.")
 
 async def main():
     async for session in get_async_session():
-        await map_tags_to_styles(session)
+        await train_and_store(session)
 
 if __name__ == "__main__":
     asyncio.run(main())

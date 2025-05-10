@@ -1,6 +1,7 @@
 import uuid
 from mimetypes import knownfiles
-
+import json
+from rapidfuzz import fuzz
 from sqlalchemy import func
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
@@ -17,6 +18,9 @@ import logging
 from services.music_service import MusicService
 from services.device_service import DeviceService
 from services.websocket_service import WebSocketService
+import numpy as np
+from uuid import UUID
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +99,81 @@ class PlaybackHistoryService:
         ]
 
         return top_tracks
+
+    async def get_taste_vector_for_user(
+            self,
+            user: User,
+            alpha: float = 1.0,
+            past_days: int = 30,
+            recent_days: int = 7
+    ) -> tuple[np.ndarray, set[UUID]]:
+        """
+        Compute directional taste vector (v_query) from user playback history.
+        Returns the extrapolated vector and a set of played album UUIDs to exclude.
+        """
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        past_start = now - timedelta(days=past_days)
+        recent_start = now - timedelta(days=recent_days)
+
+        # Step 1: Fetch past month and past week albums
+        stmt = (
+            select(PlaybackHistory.album_uuid, PlaybackHistory.played_at)
+            .where(PlaybackHistory.user_uuid == user.user_uuid)
+            .where(PlaybackHistory.full_play)
+            .where(PlaybackHistory.album_uuid.is_not(None))
+        )
+        result = await self.db.execute(stmt)
+        all_plays = result.fetchall()
+
+        past_month_uuids = {
+            row.album_uuid for row in all_plays
+            if past_start <= row.played_at < recent_start
+        }
+        logger.info(past_month_uuids)
+        past_week_uuids = {
+            row.album_uuid for row in all_plays
+            if row.played_at >= recent_start
+        }
+        logger.info(past_week_uuids)
+        all_played_uuids = {row.album_uuid for row in all_plays}
+
+        # Step 2: Fetch embeddings
+        async def fetch_embeddings(album_uuids: set[UUID]) -> list[np.ndarray]:
+            if not album_uuids:
+                return []
+            result = await self.db.execute(
+                text("SELECT album_uuid, embedding FROM album_graph_embedding WHERE album_uuid = ANY(:uuids)")
+                .bindparams(uuids=list(album_uuids))
+            )
+            return [np.array(json.loads(row.embedding), dtype=np.float32) for row in result.fetchall()]
+
+        v_prev_set = await fetch_embeddings(past_month_uuids)
+        v_curr_set = await fetch_embeddings(past_week_uuids)
+        logger.info(v_prev_set)
+        logger.info(v_curr_set)
+
+        # Step 3: Compute compound vectors
+        def compute_compound(vectors: list[np.ndarray]) -> np.ndarray:
+            if not vectors:
+                return np.zeros(128)
+            stacked = np.stack(vectors)
+            centroid = stacked.mean(axis=0)
+            diffs = stacked - centroid
+            top_outlier = diffs[np.argmax(np.linalg.norm(diffs, axis=1))]
+            return 0.75 * centroid + 0.25 * top_outlier
+
+        v_prev = compute_compound(v_prev_set)
+        v_curr = compute_compound(v_curr_set)
+
+        if not v_prev.any() or not v_curr.any():
+            raise HTTPException(status_code=404, detail="Not enough playback data to generate recommendations.")
+
+        # Step 4: Extrapolate
+        v_query = v_curr + alpha * (v_curr - v_prev)
+        v_query /= np.linalg.norm(v_query)
+
+        return v_query, all_played_uuids
 
     async def get_currently_playing(self, user: User) -> Optional[CurrentlyPlaying]:
         statement = (
@@ -274,6 +353,100 @@ class PlaybackHistoryService:
                 await self.db.flush()
 
             logger.debug(f"Skipping {update}, unknown song")
+
+    from models.sqlmodels import PlaybackHistory
+    from uuid import UUID
+    from datetime import datetime
+
+    async def add_historic_listen(
+            self,
+            user: User,
+            artist_name: str,
+            track_name: str,
+            album_name: Optional[str],
+            played_at: datetime,
+            source: str,
+            album_mbid: Optional[str] = None,
+            device_id: str = "lastfm_import",
+            device_name: str = "lastfm Import",
+    ) -> bool:
+        """
+        Add a playback history entry from an external historic source like Last.fm.
+        Returns True if matched and added, False if no match was found.
+        """
+
+        read_tracks = []
+
+        # If MBID is provided, try direct match
+        if album_mbid:
+            album_query = (
+                select(Album)
+                .where(Album.musicbrainz_release_group_id == album_mbid)
+                .options(
+                    selectinload(Album.tracks),
+                    selectinload(Album.artists),
+                    selectinload(Album.tags),
+                    selectinload(Album.types),
+                    selectinload(Album.releases),
+                )
+            )
+            result = await self.db.execute(album_query)
+            album = result.scalar_one_or_none()
+
+            if album:
+                # Fuzzy match track name on album (threshold can be tuned)
+                matching_tracks = sorted(
+                    album.tracks,
+                    key=lambda t: fuzz.token_sort_ratio(t.name.lower(), track_name.lower()),
+                    reverse=True
+                )
+
+                # Use the top match if similarity is above threshold
+                best_match = matching_tracks[0] if matching_tracks else None
+                similarity_score = fuzz.token_sort_ratio(best_match.name.lower(),
+                                                         track_name.lower()) if best_match else 0
+
+                if best_match and similarity_score >= 80:
+                    read_track = self.music_service._to_track_read(best_match, album)
+                    read_tracks = [read_track]
+
+        # Fallback to search if no MBID match
+        if not read_tracks:
+            read_tracks = await self.music_service.search_track(
+                user_uuid=user.user_uuid,
+                track_name=track_name,
+                artist_name=artist_name,
+                album_name=album_name,
+            )
+
+        if not read_tracks:
+            return False  # Nothing matched
+
+        read_track = read_tracks[0]
+
+        # Get or create import device
+        device = await self.device_service.get_or_create_device(
+            user=user,
+            device_id=device_id,
+            device_name=device_name
+        )
+
+        # Insert playback history row
+        played = PlaybackHistory(
+            spotify_track_id=None,
+            user_uuid=user.user_uuid,
+            track_uuid=read_track.track_uuid,
+            album_uuid=read_track.albums[0].album_uuid if read_track.albums else None,
+            source=source,
+            device_uuid=device.device_uuid,
+            full_play=True,
+            is_still_playing=False,
+            played_at=played_at.replace(tzinfo=None),
+        )
+
+        self.db.add(played)
+        return True
+
 
     # --- helper:
     async def get_median_duration(self, track_uuid: uuid.UUID) -> int:
