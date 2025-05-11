@@ -9,6 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import numpy as np
 import mmh3
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import normalize
+from scipy.sparse import csr_matrix
 
 # Fix Python paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +25,7 @@ from models.sqlmodels import AlbumVector
 MAX_STYLE_DIM = 5478
 ARTIST_VECTOR_DIM = 512
 YEAR_VECTOR_DIM = 1
+REDUCED_DIM = 1024  # or whatever dimension you want to reduce to
 
 # --- Vector helpers ---
 def make_artist_vector(artist_uuids: List[UUID], dim: int = ARTIST_VECTOR_DIM) -> np.ndarray:
@@ -167,6 +171,19 @@ async def compute_and_store_album_vectors(session: AsyncSession):
 
     style_vectors = await load_style_vectors(session, style_index, style_parent_map)
 
+    print("📉 Reducing style vectors in memory...")
+
+    uuids, matrix = zip(*style_vectors.items())
+    matrix = np.stack(matrix)
+    matrix = normalize(matrix, axis=1)
+    matrix_sparse = csr_matrix(matrix)
+
+    svd = TruncatedSVD(n_components=REDUCED_DIM, n_iter=10, random_state=42)
+    reduced_matrix = svd.fit_transform(matrix_sparse)
+
+    # Build reduced vector map
+    reduced_vectors = {uuid: vec for uuid, vec in zip(uuids, reduced_matrix)}
+
     print(f"🎯 Processing {len(albums)} albums...")
     await session.execute(text("TRUNCATE TABLE album_vector;"))
 
@@ -180,14 +197,14 @@ async def compute_and_store_album_vectors(session: AsyncSession):
         type_uuids = type_map.get(album_uuid, [])
         type_vector = make_type_vector(type_uuids, type_index)
 
-        style_vector = style_vectors.get(album_uuid, np.zeros(len(style_index), dtype=np.float32))
+        style_vector = reduced_vectors.get(album_uuid, np.zeros(REDUCED_DIM, dtype=np.float32))
 
         session.add(AlbumVector(
             album_uuid=album_uuid,
             year_vector=year_vector,
             artist_vector=artist_vector,
             type_vector=type_vector,
-            style_vector=style_vector
+            style_vector_reduced=style_vector
         ))
 
         if (i + 1) % 1000 == 0:

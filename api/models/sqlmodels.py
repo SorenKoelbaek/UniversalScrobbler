@@ -47,7 +47,6 @@ class AlbumVector(SQLModel, table=True):
     artist_vector: List[float] = Field(sa_column=Column(Vector(512), nullable=False))
     year_vector: List[float] = Field(sa_column=Column(Vector(1), nullable=False))
     type_vector: List[float] = Field(sa_column=Column(Vector(17), nullable=False))
-    style_vector: List[float] = Field(sa_column=Column(Vector(5478), nullable=False))
     style_vector_reduced: List[float] = Field(sa_column=Column(Vector(1024), nullable=True))
 
 class RefreshToken(SQLModel, table=True):

@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge, TrackVersion, TrackVersionTagBridge, \
     ArtistTagBridge, TrackAlbumBridge, AlbumArtistBridge, SearchIndex, ScrobbleResolutionIndex, \
-    ScrobbleResolutionSearchIndex
+    ScrobbleResolutionSearchIndex, AlbumVector
 from models.appmodels import AlbumRead, ArtistRead, TrackRead, TagBase, PaginatedResponse, ArtistBase, TrackReadSimple, \
     AlbumFindSimilarRequest
 from uuid import UUID
@@ -17,6 +17,8 @@ from typing import List, Optional, Set
 import logging
 logger = logging.getLogger(__name__)
 from dependencies.musicbrainz_api import MusicBrainzAPI
+from uuid import UUID
+from typing import List
 
 import re
 from rapidfuzz import fuzz
@@ -52,49 +54,73 @@ def rank_album_preference(album, expected_title: str):
 
     return score
 
+def vector_to_pgstring(vec: list[float]) -> str:
+    return f"({', '.join(str(round(x, 6)) for x in vec)})"
 
 class MusicService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
     async def find_similar_albums(
-        self,
-        request: AlbumFindSimilarRequest,
-        limit: int = 50
+            self,
+            request: AlbumFindSimilarRequest,
+            limit: int = 50
     ) -> PaginatedResponse[AlbumRead]:
         album_uuids: List[UUID] = request.albums
         if not album_uuids:
             raise ValueError("At least one album UUID must be provided")
+        if len(album_uuids) > 1:
+            raise ValueError("Only one album UUID is supported for now")
 
-        # Main similarity SQL: for each candidate album, get MAX score to any input album
-        # Weight: style (0.4), artist (0.3), type (0.2), year (0.1), year uses Euclidean
+        seed_uuid = album_uuids[0]
+
+        # Step 1: Fetch the seed vectors
+        result = await self.db.execute(
+            select(
+                AlbumVector.style_vector_reduced,
+                AlbumVector.artist_vector,
+                AlbumVector.type_vector,
+                AlbumVector.year_vector
+            ).where(AlbumVector.album_uuid == seed_uuid)
+        )
+        row = result.first()
+        if not row:
+            raise ValueError(f"No vectors found for album {seed_uuid}")
+
+        style_vec, artist_vec, type_vec, year_vec = row
+
+        # Step 2: Use positional parameters for asyncpg
         sql = text("""
             SELECT
-                target.album_uuid,
-                MAX(
-                    0.4 * (1 - (target.style_vector <=> seed.style_vector)) +
-                    0.3 * (1 - (target.artist_vector <=> seed.artist_vector)) +
-                    0.2 * (1 - (target.type_vector <=> seed.type_vector)) +
-                    0.1 * (1 / (1 + (target.year_vector <-> seed.year_vector)))
-                ) AS score
-            FROM album_vector AS target
-            JOIN album_vector AS seed ON seed.album_uuid = ANY(:seed_ids)
-            WHERE target.album_uuid != ALL(:seed_ids)
-            GROUP BY target.album_uuid
+                album_uuid,
+                0.4 * (1 - (style_vector_reduced <#> $1::vector)) +
+                0.3 * (1 - (artist_vector <#> $2::vector)) +
+                0.2 * (1 - (type_vector <#> $3::vector)) +
+                0.1 * (1 / (1 + (year_vector <-> $4::vector))) AS score
+            FROM album_vector
+            WHERE album_uuid != $5
             ORDER BY score DESC
-            LIMIT :limit
-        """)
+            LIMIT $6
+        """).execution_options(positional=True)
 
-        result = await self.db.execute(sql, {"seed_ids": album_uuids, "limit": limit * 2})
+        params = (
+            vector_to_pgstring(style_vec),
+            vector_to_pgstring(artist_vec),
+            vector_to_pgstring(type_vec),
+            vector_to_pgstring(year_vec),
+            str(seed_uuid),
+            limit * 2,
+        )
+
+        result = await self.db.execute(sql, params)
+
         rows = result.fetchall()
-
-        # Extract just the UUIDs
         result_ids = [row[0] for row in rows]
 
         if not result_ids:
             return PaginatedResponse(total=0, offset=0, limit=limit, items=[])
 
-        # Fetch matching albums
+        # Fetch albums and preserve order
         stmt = (
             select(Album)
             .where(Album.album_uuid.in_(result_ids))
@@ -108,8 +134,6 @@ class MusicService:
         )
         result = await self.db.execute(stmt)
         albums = result.scalars().all()
-
-        # Sort again to match score order
         album_map = {a.album_uuid: a for a in albums}
         ordered = [album_map[uuid] for uuid in result_ids if uuid in album_map][:limit]
 
