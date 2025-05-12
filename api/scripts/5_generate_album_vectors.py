@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import numpy as np
 import mmh3
-from sklearn.decomposition import TruncatedSVD
+
+from sklearn.decomposition import IncrementalPCA
 from sklearn.preprocessing import normalize
-from scipy.sparse import csr_matrix
 
 # Fix Python paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +26,7 @@ MAX_STYLE_DIM = 5478
 ARTIST_VECTOR_DIM = 512
 YEAR_VECTOR_DIM = 1
 REDUCED_DIM = 1024  # or whatever dimension you want to reduce to
+BATCH_SIZE = 10000
 
 # --- Vector helpers ---
 def make_artist_vector(artist_uuids: List[UUID], dim: int = ARTIST_VECTOR_DIM) -> np.ndarray:
@@ -171,18 +172,32 @@ async def compute_and_store_album_vectors(session: AsyncSession):
 
     style_vectors = await load_style_vectors(session, style_index, style_parent_map)
 
+
+    REDUCED_DIM = 1024
+    BATCH_SIZE = 10000
+
     print("📉 Reducing style vectors in memory...")
 
-    uuids, matrix = zip(*style_vectors.items())
-    matrix = np.stack(matrix)
-    matrix = normalize(matrix, axis=1)
-    matrix_sparse = csr_matrix(matrix)
+    # Prepare UUID list and batching
+    uuids = list(style_vectors.keys())
+    ipca = IncrementalPCA(n_components=REDUCED_DIM)
 
-    svd = TruncatedSVD(n_components=REDUCED_DIM, n_iter=10, random_state=42)
-    reduced_matrix = svd.fit_transform(matrix_sparse)
+    # First pass: partial fit
+    print("🔁 First pass (partial_fit)...")
+    for i in range(0, len(uuids), BATCH_SIZE):
+        batch_vectors = [style_vectors[uuid] for uuid in uuids[i:i + BATCH_SIZE]]
+        matrix = normalize(np.stack(batch_vectors), axis=1)
+        ipca.partial_fit(matrix)
 
-    # Build reduced vector map
-    reduced_vectors = {uuid: vec for uuid, vec in zip(uuids, reduced_matrix)}
+    # Second pass: transform and store
+    print("🔁 Second pass (transform and collect)...")
+    reduced_vectors = {}
+    for i in range(0, len(uuids), BATCH_SIZE):
+        batch_ids = uuids[i:i + BATCH_SIZE]
+        batch_vectors = [style_vectors[uuid] for uuid in batch_ids]
+        matrix = normalize(np.stack(batch_vectors), axis=1)
+        reduced_batch = ipca.transform(matrix)
+        reduced_vectors.update(zip(batch_ids, reduced_batch))
 
     print(f"🎯 Processing {len(albums)} albums...")
     await session.execute(text("TRUNCATE TABLE album_vector;"))
