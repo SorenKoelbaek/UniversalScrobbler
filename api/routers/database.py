@@ -59,7 +59,6 @@ async def delete_all(db: AsyncSession = Depends(get_async_session), user: User =
             await db.execute(delete(AlbumReleaseTagBridge))
             await db.execute(delete(AlbumReleaseGenreBridge))
             await db.execute(delete(ArtistTagBridge))
-
             await db.execute(delete(Tag))
             await db.execute(delete(Track))
             await db.execute(delete(Collection))

@@ -58,6 +58,18 @@ const Profile = () => {
       console.error("Error during Discogs login redirect:", err);
     }
   };
+  const handleDeleteAll = async () => {
+    try {
+      const res = await apiClient.get("/database/delete_all"); // returns { url: "https://..." }
+      if (res.data.url) {
+        window.location.href = res.data.url;
+      } else {
+        console.error("No redirect URL received from backend");
+      }
+    } catch (err) {
+      console.error("Error during Discogs login redirect:", err);
+    }
+  };
   const handleRefreshDiscogs = async () => {
     setLoading(true);
     setSuccess(false);
@@ -148,6 +160,20 @@ const Profile = () => {
                 sx={{ mt: 2 }}
               >
                 {loading ? <CircularProgress size={24} /> : "Rebuild collection"}
+              </Button>
+              {success && (
+                <Typography variant="body2" color="success.main" sx={{ mt: 1 }}>
+                  Refresh triggered!
+                </Typography>
+              )}
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleDeleteAll}
+                disabled={loading}
+                sx={{ mt: 2 }}
+              >
+                {loading ? <CircularProgress size={24} /> : "Delete all"}
               </Button>
               {success && (
                 <Typography variant="body2" color="success.main" sx={{ mt: 1 }}>
