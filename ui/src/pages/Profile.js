@@ -60,7 +60,7 @@ const Profile = () => {
   };
   const handleDeleteAll = async () => {
     try {
-      const res = await apiClient.get("/database/delete_all"); // returns { url: "https://..." }
+      const res = await apiClient.delete("/database/delete_all"); // returns { url: "https://..." }
       if (res.data.url) {
         window.location.href = res.data.url;
       } else {
