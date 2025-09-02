@@ -52,6 +52,7 @@ class User(SQLModel, table=True):
         default_factory=now_utc_naive,
         sa_column_kwargs={"server_default": func.now()}
     )
+
     password: str
     spotify_token: Optional["SpotifyToken"] = Relationship(back_populates="user")
     discogs_token: Optional["DiscogsToken"] = Relationship(back_populates="user")

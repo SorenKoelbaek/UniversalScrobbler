@@ -222,6 +222,7 @@ class CollectionAlbumFormatRead(BaseModel):
 
 class AlbumFlat(BaseModel):
     album_uuid: UUID
+    quality: str
     title: str = Field(alias="title")
     release_date: Optional[datetime]
     image_url: Optional[str]

@@ -15,6 +15,7 @@ const AlbumGridCard = ({ albumRelease }) => {
     release_date,
     artists,
     album_uuid,
+    formats
   } = albumRelease;
 
   const navigate = useNavigate();

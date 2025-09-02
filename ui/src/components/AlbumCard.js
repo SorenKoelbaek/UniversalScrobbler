@@ -15,6 +15,7 @@ const AlbumCard = ({ albumRelease }) => {
     artists,
     album_uuid,
     formats,
+    quality
   } = albumRelease;
 
   const { ref, inView } = useInView({
@@ -30,7 +31,17 @@ const AlbumCard = ({ albumRelease }) => {
     : "—";
 
   return (
-    <TableRow hover onClick={() => navigate(`/album/${album_uuid}`)} style={{ cursor: "pointer" }}>
+    <TableRow
+      hover
+      onClick={() => navigate(`/album/${album_uuid}`)}
+      sx={{
+        cursor: "pointer",
+        bgcolor: quality === "poor" ? "rgba(255, 0, 0, 0.18)" : "inherit",
+        "&:hover": {
+          bgcolor: quality === "poor" ? "rgba(255, 0, 0, 0.25)" : "action.hover",
+        },
+      }}
+    >
       <TableCell ref={ref}>
         {inView && (
           <Avatar

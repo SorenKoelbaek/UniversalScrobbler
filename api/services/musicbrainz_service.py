@@ -553,10 +553,30 @@ class MusicBrainzService:
             recording_details = recordings_by_id.get(recording_id, {})
 
             # Track creation (by title + duration)
+            # Track creation (scoped to album by TrackAlbumBridge)
             result = await self.db.execute(
-                select(Track).where(Track.name == title, Track.duration == length)
+                select(Track)
+                .join(TrackAlbumBridge, Track.track_uuid == TrackAlbumBridge.track_uuid)
+                .where(
+                    Track.name == title,
+                    Track.duration == length,
+                    TrackAlbumBridge.album_uuid == album.album_uuid
+                )
             )
-            track = result.scalar_one_or_none()
+            track = result.scalars().first()  # ✅ avoids crash
+
+            if not track:
+                track = Track(name=title, duration=length if length else None)
+                self.db.add(track)
+                await self.db.flush()
+
+                # Always link Track ↔ Album
+                self.db.add(TrackAlbumBridge(
+                    track_uuid=track.track_uuid,
+                    album_uuid=album.album_uuid,
+                    track_number=track_number
+                ))
+
             if not track:
                 track = Track(name=title, duration=length if length else None)
                 self.db.add(track)
