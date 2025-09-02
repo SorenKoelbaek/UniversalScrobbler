@@ -20,34 +20,32 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Drop materialized views (biggest offenders first)
-    op.execute("DROP MATERIALIZED VIEW IF EXISTS scrobble_resolution_search_index CASCADE")
-    op.execute("DROP MATERIALIZED VIEW IF EXISTS scrobble_resolution_index CASCADE")
-    op.execute("DROP MATERIALIZED VIEW IF EXISTS artist_album_tag_fingerprint CASCADE")
-    op.execute("DROP MATERIALIZED VIEW IF EXISTS album_tag_genre_style_fingerprint CASCADE")
+    op.execute("DROP MATERIALIZED VIEW IF EXISTS scrobble_resolution_search_index")
+    op.execute("DROP MATERIALIZED VIEW IF EXISTS scrobble_resolution_index")
+    op.execute("DROP MATERIALIZED VIEW IF EXISTS artist_album_tag_fingerprint")
+    op.execute("DROP MATERIALIZED VIEW IF EXISTS album_tag_genre_style_fingerprint")
 
-    # Drop large index concurrently (non-blocking)
-    op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_album_vector_album_uuid")
+    # 2. Drop index
+    op.execute("DROP INDEX IF EXISTS ix_album_vector_album_uuid")
 
-    # Drop tables
-    op.drop_table('album_vector')
-    op.drop_table('tag_genre_mapping')
-    op.drop_table('tag_style_match')
-    op.drop_table('style_style_mapping')
-    op.drop_table('style')
-    op.drop_table('spotifytoken')
-    op.drop_table('discogs_track')
+    # 3. Drop tables
+    op.execute("DROP TABLE IF EXISTS album_vector")
+    op.execute("DROP TABLE IF EXISTS tag_genre_mapping")
+    op.execute("DROP TABLE IF EXISTS tag_style_match")
+    op.execute("DROP TABLE IF EXISTS style_style_mapping")
+    op.execute("DROP TABLE IF EXISTS style")
+    op.execute("DROP TABLE IF EXISTS spotifytoken")
+    op.execute("DROP TABLE IF EXISTS discogs_track")
 
-    # Recreate correct foreign key
-    op.drop_constraint('playback_history_track_uuid_fkey', 'playback_history', type_='foreignkey')
-    op.create_foreign_key(
-        "playback_history_track_uuid_fkey",
-        "playback_history",
-        "track",
-        ["track_uuid"],
-        ["track_uuid"],
+    # 4. Recreate FK correctly
+    op.execute(
+        "ALTER TABLE playback_history DROP CONSTRAINT IF EXISTS playback_history_track_uuid_fkey"
     )
-
+    op.execute(
+        "ALTER TABLE playback_history "
+        "ADD CONSTRAINT playback_history_track_uuid_fkey "
+        "FOREIGN KEY (track_uuid) REFERENCES track(track_uuid)"
+    )
 
 
 def downgrade() -> None:
