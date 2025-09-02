@@ -152,6 +152,7 @@ class TrackVersionBase(BaseModel):
     track_version_uuid: UUID
     album_releases: Optional[List[AlbumReleaseBase]] = []  # The album release this version belongs to
     duration: Optional[int] = None  # Duration of the track in seconds
+    recording_id: str
     tags: List["TagBase"] = []  # List of tags associated with this track version
 
     class Config:
@@ -212,6 +213,13 @@ class AlbumRead(AlbumBase):
     class Config:
         from_attributes=True
 
+class CollectionAlbumFormatRead(BaseModel):
+    format: str
+    status: str
+
+    class Config:
+        from_attributes = True
+
 class AlbumReleaseFlat(BaseModel):
     album_release_uuid: UUID
     album_title: str = Field(..., alias=AliasPath("album", "title"))
@@ -220,7 +228,10 @@ class AlbumReleaseFlat(BaseModel):
     image_url: Optional[str] = Field(..., alias=AliasPath("album", "image_url"))
     image_thumbnail_url: Optional[str] = Field(..., alias=AliasPath("album", "image_thumbnail_url"))
     artists: List[ArtistBase] = Field(..., alias=AliasPath("album", "artists"))
-
+    formats: List[CollectionAlbumFormatRead] = Field(
+        default_factory=list,
+        alias=AliasPath("album", "collectionalbumbridge", 0, "formats")
+    )
     class Config:
         from_attributes=True
 
@@ -241,6 +252,13 @@ class AlbumReleaseSimple(BaseModel):
         from_attributes=True
 
 
+
+class AlbumInCollection(AlbumSimple):
+    formats: List[CollectionAlbumFormatRead] = []
+
+    class Config:
+        from_attributes = True
+
 class CollectionBase(BaseModel):
     collection_uuid: UUID
     collection_name: str
@@ -248,6 +266,23 @@ class CollectionBase(BaseModel):
     class Config:
         from_attributes=True
 
+class CollectionTrackBase(BaseModel):
+    collection_track_uuid: UUID
+    collection_uuid: UUID
+    track_version_uuid: UUID
+    path: Optional[str] = None
+    quality: Optional[str] = None
+    format: Optional[str] = None
+    added_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class CollectionTrackRead(CollectionTrackBase):
+    track_version: Optional[TrackVersionBase] = None
+
+    class Config:
+        from_attributes = True
 
 class CollectionSimple(CollectionBase):
     albums: List[AlbumBase]
@@ -258,6 +293,7 @@ class CollectionSimple(CollectionBase):
 
 class CollectionSimpleRead(CollectionBase):
     album_releases: list[AlbumReleaseFlat]
+    tracks: List[CollectionTrackRead]
 
     class Config:
         from_attributes = True
@@ -270,9 +306,10 @@ class PaginatedResponse(BaseModel, Generic[T]):
 
 # CollectionRead represents a user's collection and all albums/releases in it
 class CollectionRead(CollectionBase):
-    albums: List[AlbumSimple]  # List of albums (master) in the collection
+    albums: List[AlbumInCollection]  # List of albums (master) in the collection
     album_releases: List[AlbumReleaseBase]  # List of album releases in the collection
     created_at: Optional[datetime]  # Track when collection was created
+    tracks: List[CollectionTrackRead]
 
     class Config:
         from_attributes=True
@@ -311,3 +348,25 @@ class AlbumFindSimilarRequest(BaseModel):
     artists: Optional[List[UUID]] = None
     styles: Optional[List[UUID]] = None
     types: Optional[List[UUID]] = None
+
+class ListenArtist(BaseModel):
+    name: str
+    mbid: Optional[str]
+
+class ListenAlbum(BaseModel):
+    name: str
+    mbid: Optional[str]
+
+class ListenTrack(BaseModel):
+    name: str
+    duration_ms: Optional[int]
+    mbid: Optional[str]
+    uri: Optional[str]
+
+class ListenEvent(BaseModel):
+    source: str
+    played_at: datetime
+    reported_at: datetime
+    track: ListenTrack
+    album: ListenAlbum
+    artists: List[ListenArtist]

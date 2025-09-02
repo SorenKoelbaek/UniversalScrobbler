@@ -35,7 +35,67 @@ from dependencies.cover_art_archive_api import CoverArtArchiveAPI
 cover_art_archive = CoverArtArchiveAPI()
 from config import settings
 import logging
+import re
+import unicodedata
+from rapidfuzz import fuzz
+
 logger = logging.getLogger(__name__)
+
+
+
+def fuzzy_match_title(candidate: str, choices: list[str], threshold: int = 90) -> str | None:
+    for c in choices:
+        score = fuzz.ratio(candidate, c)
+        if score >= threshold:
+            return c
+    return None
+
+
+
+def normalize_title(title: str) -> str:
+    """
+    Normalize track/album titles for robust matching.
+    - Lowercase
+    - Strip whitespace
+    - Collapse multiple spaces
+    - Remove diacritics
+    - Standardize apostrophes/quotes
+    - Remove punctuation in parentheses like (skit), (intro)
+    - Replace separators (/,&,+,-,–,—,.,,) with spaces
+    - Remove other non-alphanumeric except spaces
+    """
+    if not title:
+        return ""
+
+    # Unicode normalize + strip diacritics
+    s = unicodedata.normalize("NFKD", title)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+
+    # Lowercase
+    s = s.lower()
+
+    # Standardize apostrophes/quotes
+    s = (
+        s.replace("’", "'")
+         .replace("‘", "'")
+         .replace("“", '"')
+         .replace("”", '"')
+    )
+
+    # Remove parentheticals (skit), (intro), etc.
+    s = re.sub(r"\([^)]*\)", "", s)
+
+    # Replace common separators with space
+    s = re.sub(r"[\/&\+\-\–\—,:;]", " ", s)
+
+    # Remove other non-alphanumeric (keep spaces)
+    s = re.sub(r"[^a-z0-9\s]", "", s)
+
+    # Collapse spaces
+    s = re.sub(r"\s+", " ", s).strip()
+
+    return s
+
 
 def parse_date(date_str: Optional[str]) -> Optional[date]:
     if not date_str:
@@ -658,7 +718,7 @@ class MusicBrainzService:
 
             existing_tracks[track_key] = track
 
-            from sqlalchemy.dialects.postgresql import insert
+
             # Track ↔ Album
             bridge_key = (track.track_uuid, album.album_uuid)
             if bridge_key not in existing_bridges:
@@ -771,8 +831,82 @@ class MusicBrainzService:
 
         return used_artists, []
 
-    # Get or create album from release
-    async def get_or_create_album_from_musicbrainz_release(self, musicbrainz_release_id: str, discogs_release_id: int = None, should_take_duration:bool=False) -> Tuple[Album, AlbumRelease]:
+    async def get_or_create_track_version(
+            self,
+            release_id: str,
+            title: str,
+            mb_trackid: Optional[str] = None,
+    ) -> Optional[TrackVersion]:
+        """
+        Return an existing TrackVersion for a given release.
+        Priority:
+          1. MB recording_id
+          2. Exact normalized title match
+          3. Fuzzy normalized title match
+        Never calls MusicBrainz API.
+        """
+
+        # Step 1: Fetch release UUID
+        result = await self.db.execute(
+            select(AlbumRelease.album_release_uuid).where(
+                AlbumRelease.musicbrainz_release_id == release_id
+            )
+        )
+        album_release_uuid = result.scalar_one_or_none()
+        if not album_release_uuid:
+            logger.warning(f"No AlbumRelease found in DB for release {release_id}")
+            return None
+
+        # Step 2: Preload all track_versions + tracks for this release
+        result = await self.db.execute(
+            select(TrackVersion, Track)
+            .join(Track, Track.track_uuid == TrackVersion.track_uuid)
+            .join(
+                TrackVersionAlbumReleaseBridge,
+                TrackVersionAlbumReleaseBridge.track_version_uuid == TrackVersion.track_version_uuid,
+            )
+            .where(TrackVersionAlbumReleaseBridge.album_release_uuid == album_release_uuid)
+        )
+        rows: list[tuple[TrackVersion, Track]] = result.all()
+        if not rows:
+            logger.warning(f"No TrackVersions linked for release {release_id}")
+            return None
+
+        # 1. MBID match
+        if mb_trackid:
+            for tv, _ in rows:
+                if tv.recording_id == mb_trackid:
+                    return tv
+
+        # Prepare normalized names
+        title_norm = normalize_title(title)
+        name_map = {normalize_title(track.name): (tv, track) for tv, track in rows}
+
+        # 2. Exact normalized match
+        if title_norm in name_map:
+            tv, track = name_map[title_norm]
+            return tv
+
+        # 3. Fuzzy match
+        best = fuzzy_match_title(title_norm, list(name_map.keys()))
+        if best:
+            tv, track = name_map[best]
+            logger.info(
+                f"Fuzzy matched '{title}' -> '{track.name}' "
+                f"(score vs norm: {best})"
+            )
+            return tv
+
+        # 4. Failure
+        logger.warning(f"No track_version match for '{title}' on release {release_id}")
+        return None
+
+    async def get_or_create_album_from_musicbrainz_release(
+            self,
+            musicbrainz_release_id: str,
+            discogs_release_id: int = None,
+            should_take_duration: bool = False
+    ) -> Tuple[Album, AlbumRelease]:
         result = await self.db.execute(
             select(AlbumRelease)
             .where(AlbumRelease.musicbrainz_release_id == musicbrainz_release_id)
@@ -781,6 +915,7 @@ class MusicBrainzService:
         album_release = result.scalar_one_or_none()
         if album_release:
             return album_release.album, album_release
+
         release_data = await self.api.get_release(musicbrainz_release_id)
         await asyncio.sleep(1)
         release_group = await self.api.get_release_group_by_release_id(musicbrainz_release_id)
@@ -789,11 +924,21 @@ class MusicBrainzService:
 
         album = await self.get_or_create_album_from_release_group(release_group)
         album_release = await self.create_album_release(album, release_data, discogs_release_id)
+
         # add images
         album = await self.fetch_album_image(album, cover_art_archive)
         album_release = await self.fetch_album_release_image(album_release, cover_art_archive)
+
         for media in release_data.get("media", []):
-            await self.create_tracks_and_versions(album, album_release, media.get("tracks", []), recordings_data, should_take_duration)
+            await self.create_tracks_and_versions(
+                album,
+                album_release,
+                media.get("tracks", []),
+                recordings_data,
+                should_take_duration,
+            )
+
+        await self.db.commit()
 
         return album, album_release
 

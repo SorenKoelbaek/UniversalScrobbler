@@ -7,8 +7,7 @@ from pydantic import BaseModel, TypeAdapter
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.sqlmodels import Album, Artist, Track, Tag, Genre, AlbumTagBridge, TrackVersion, TrackVersionTagBridge, \
-    ArtistTagBridge, TrackAlbumBridge, AlbumArtistBridge, SearchIndex, ScrobbleResolutionIndex, \
-    ScrobbleResolutionSearchIndex, AlbumVector
+    ArtistTagBridge, TrackAlbumBridge, AlbumArtistBridge, SearchIndex
 from models.appmodels import AlbumRead, ArtistRead, TrackRead, TagBase, PaginatedResponse, ArtistBase, TrackReadSimple, \
     AlbumFindSimilarRequest
 from uuid import UUID

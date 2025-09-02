@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from routers import (auth_router, database, spotify, consumption, discogs, music, collection, websocket)
+from routers import (auth_router, spotify, consumption, discogs, music, collection)
 from fastapi.security import OAuth2PasswordBearer
 from routers import event
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,9 +32,6 @@ app.add_middleware(
     allow_headers=["*"],  # Allow Authorization header
 )
 
-
-app.include_router(websocket.router)
-
 app.include_router(spotify.router)
 app.include_router(discogs.router)
 app.include_router(collection.router)
@@ -43,7 +40,6 @@ app.include_router(music.router)
 
 app.include_router(event.router)
 app.include_router(auth_router.router)
-app.include_router(database.router)
 
 logging.info(f"Starting with environment = {settings.current_env}")
 

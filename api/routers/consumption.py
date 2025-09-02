@@ -2,13 +2,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, HTTPException, Path
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime, timedelta, UTC
 from dependencies.auth import get_current_user
-from models.appmodels import AlbumFindSimilarRequest, PlaybackHistorySimple, CurrentlyPlaying, PaginatedResponse, AlbumRead
-from typing import List
+from models.appmodels import AlbumFindSimilarRequest, PlaybackHistorySimple, PaginatedResponse, AlbumRead, ListenEvent
 from services.playback_history_service import PlaybackHistoryService
 from dependencies.database import get_async_session
 from services.music_service import MusicService
+from services.listen_service import ListenService
 from sqlalchemy import select
 from models.sqlmodels import User
 
@@ -16,6 +15,15 @@ router = APIRouter(
     prefix="/consumption",
     tags=["consumption"],
 )
+@router.post("/listen")
+async def add_listen(
+    event: ListenEvent,
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user),
+):
+    service = ListenService(db)
+    listen = await service.process_listen(user, event)
+    return {"status": "ok", "track": listen.track_uuid, "album": listen.album_uuid}
 
 
 @router.get("/history", response_model=PaginatedResponse[PlaybackHistorySimple])

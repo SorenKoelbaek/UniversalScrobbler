@@ -2,7 +2,7 @@ from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy import func
 from typing import Optional, List
 from datetime import datetime, UTC,  timezone
-from sqlalchemy import BigInteger, Column, String
+from sqlalchemy import BigInteger, Column, String, ForeignKeyConstraint, UniqueConstraint
 from typing import Annotated
 from uuid import UUID, uuid4
 from datetime import datetime, date
@@ -12,42 +12,6 @@ from pgvector.sqlalchemy import Vector
 
 def now_utc_naive():
     return datetime.now(timezone.utc).replace(tzinfo=None)
-
-class TagStyleMatch(SQLModel, table=True):
-    __tablename__ = "tag_style_match"
-    tag_uuid: UUID = Field(primary_key=True)
-    style_uuid: UUID= Field(primary_key=True)
-
-class Style(SQLModel, table=True):
-    __tablename__ = "style"
-    style_uuid: UUID = Field(primary_key=True)
-    style_name: str
-    style_description: str
-    style_parent_uuid: Optional[UUID] = Field(default=None, foreign_key="style.style_uuid")
-
-class StyleStyleMapping(SQLModel, table=True):
-    __tablename__ = "style_style_mapping"
-    from_style_uuid: UUID = Field(foreign_key="style.style_uuid", primary_key=True)
-    to_style_uuid: UUID = Field(foreign_key="style.style_uuid", primary_key=True)
-
-class TagGenreMapping(SQLModel, table=True):
-    __tablename__ = "tag_genre_mapping"
-    __table_args__ = {"info": {"skip_autogenerate": True}}
-
-    tag_uuid: UUID = Field(primary_key=True)
-    genre_name: Optional[str] = Field(nullable=False)
-    style_name: Optional[str] = Field(nullable=False)
-
-
-class AlbumVector(SQLModel, table=True):
-    __tablename__ = "album_vector"
-
-    album_uuid: UUID = Field(primary_key=True, index=True)
-
-    artist_vector: List[float] = Field(sa_column=Column(Vector(512), nullable=False))
-    year_vector: List[float] = Field(sa_column=Column(Vector(1), nullable=False))
-    type_vector: List[float] = Field(sa_column=Column(Vector(17), nullable=False))
-    style_vector_reduced: List[float] = Field(sa_column=Column(Vector(1024), nullable=True))
 
 class RefreshToken(SQLModel, table=True):
     __tablename__ = "refresh_token"
@@ -71,77 +35,6 @@ class SearchIndex(SQLModel, table=True):
     search_vector: Optional[str] = Field(
         sa_column=Column("search_vector", TSVECTOR)
     )
-
-class AlbumTagGenreStyleFingerprint(SQLModel, table=True):
-    __tablename__ = "album_tag_genre_style_fingerprint"
-    __table_args__ = {"info": {"skip_autogenerate": True}}
-
-    album_uuid: UUID = Field(primary_key=True)
-    tag_uuid: UUID = Field(primary_key=True)
-    style_uuid: UUID = Field(primary_key=True)
-
-    tag_count: int = Field(
-        sa_column=Column("tag_count", INTEGER, nullable=False)
-    )
-    total_count: int = Field(
-        sa_column=Column("total_count", INTEGER, nullable=False)
-    )
-    tag_weight: float = Field(
-        sa_column=Column("tag_weight", FLOAT, nullable=False)
-    )
-
-
-class ArtistAlbumTagFingerprint(SQLModel, table=True):
-    __tablename__ = "artist_album_tag_fingerprint"
-    __table_args__ = {"info": {"skip_autogenerate": True}}
-
-    artist_uuid: UUID = Field(
-        sa_column=Column("artist_uuid", PGUUID(as_uuid=True), primary_key=True)
-    )
-    album_uuid: UUID = Field(
-        sa_column=Column("album_uuid", PGUUID(as_uuid=True), primary_key=True)
-    )
-    album_title: str = Field(nullable=False)
-    release_date: date = Field(
-        sa_column=Column("release_date", DATE, nullable=False)
-    )
-    style_uuid: UUID = Field(
-        sa_column=Column("style_uuid", PGUUID(as_uuid=True), primary_key=True)
-    )
-    tag_count: int = Field(
-        sa_column=Column("tag_count", INTEGER, nullable=False)
-    )
-    tag_weight: float = Field(
-        sa_column=Column("tag_weight", FLOAT, nullable=False)
-    )
-
-class ScrobbleResolutionSearchIndex(SQLModel, table=True):
-    __tablename__ = "scrobble_resolution_search_index"
-    __table_args__ = {"info": {"skip_autogenerate": True}}
-
-    track_uuid: UUID = Field(primary_key=True)
-    track_name: str
-    artist_uuid: UUID
-    artist_name: str
-    album_uuid: UUID
-    album_title: str
-
-    track_name_vector: str = Field(sa_column=Column(TSVECTOR), repr=False)
-    artist_name_vector: str = Field(sa_column=Column(TSVECTOR), repr=False)
-    album_title_vector: str = Field(sa_column=Column(TSVECTOR), repr=False)
-
-class ScrobbleResolutionIndex(SQLModel, table=True):
-    __tablename__ = "scrobble_resolution_index"
-    __table_args__ = {"info": {"skip_autogenerate": True}}
-
-    track_uuid: UUID = Field( primary_key=True)
-    track_name: str
-    artist_uuid: UUID
-    artist_name: str
-    album_uuid: UUID
-    album_title: str
-    search_vector: str = Field(sa_column=Column(TSVECTOR), repr=False)
-
 
 class User(SQLModel, table=True):
     """SQL representation of a user."""
@@ -385,6 +278,7 @@ class Album(SQLModel, table=True):
         sa_column_kwargs={"server_default": func.now()}
     )
     quality: Optional[str]
+    collectionalbumbridge: List["CollectionAlbumBridge"] = Relationship(back_populates="album")
 
 class AlbumRelease(SQLModel, table=True):
     __tablename__ = "album_release"
@@ -498,6 +392,7 @@ class TrackVersion(SQLModel, table=True):
         back_populates="track_versions",
         link_model=TrackVersionAlbumReleaseBridge
     )
+    collection_tracks: List["CollectionTrack"] = Relationship(back_populates="track_version")
 
     created_at: datetime = Field(
         default_factory=now_utc_naive,
@@ -509,11 +404,31 @@ class TrackVersion(SQLModel, table=True):
     genres: List["Genre"] = Relationship(back_populates="track_versions", link_model=TrackVersionGenreBridge)
     track: Optional["Track"] = Relationship(back_populates="track_versions")
 
+
+class CollectionAlbumFormat(SQLModel, table=True):
+    __tablename__ = "collection_album_format"
+
+    collection_uuid: UUID = Field(primary_key=True)
+    album_uuid: UUID = Field(primary_key=True)
+    format: str = Field(primary_key=True)   # "vinyl", "digital", "cassette", "cd"
+    status: str = Field(default="owned")    # "owned" | "wanted"
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["collection_uuid", "album_uuid"],
+            ["collection_album_bridge.collection_uuid", "collection_album_bridge.album_uuid"],
+            ondelete="CASCADE"
+        ),
+    )
+
+    bridge: "CollectionAlbumBridge" = Relationship(back_populates="formats")
+
 class CollectionAlbumBridge(SQLModel, table=True):
     __tablename__ = "collection_album_bridge"
     album_uuid: UUID = Field(foreign_key="album.album_uuid", primary_key=True)
     collection_uuid: UUID = Field(foreign_key="collection.collection_uuid", primary_key=True)
-
+    formats: List["CollectionAlbumFormat"] = Relationship(back_populates="bridge")
+    album: "Album" = Relationship(back_populates="collectionalbumbridge")
 
 class CollectionAlbumReleaseBridge(SQLModel, table=True):
     __tablename__ = "collection_album_release_bridge"
@@ -532,8 +447,26 @@ class Collection(SQLModel, table=True):
     album_releases: List["AlbumRelease"] = Relationship(
         link_model=CollectionAlbumReleaseBridge
     )
+    tracks: List["CollectionTrack"] = Relationship(back_populates="collection")
     created_at: datetime = Field(
         default_factory=now_utc_naive,
         sa_column_kwargs={"server_default": func.now()}
     )
 
+class CollectionTrack(SQLModel, table=True):
+    __tablename__ = "collection_track"
+
+    collection_track_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
+    collection_uuid: UUID = Field(foreign_key="collection.collection_uuid", index=True)
+    track_version_uuid: UUID = Field(foreign_key="track_version.track_version_uuid", index=True)
+    path: Optional[str] = None
+    quality: str | None = Field(default=None)  # e.g., FLAC, MP3 320kbps
+    format: str | None = Field(default=None)
+    added_at: datetime = Field(default_factory=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("collection_uuid", "track_version_uuid", "format"),
+    )
+
+    collection: "Collection" = Relationship(back_populates="tracks")
+    track_version: "TrackVersion" = Relationship(back_populates="collection_tracks")

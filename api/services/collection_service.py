@@ -2,19 +2,21 @@ from sqlalchemy import func, or_, exists
 from sqlalchemy.orm import selectinload
 
 from models.sqlmodels import Collection, Album, CollectionAlbumReleaseBridge, Artist, AlbumRelease, \
-    AlbumReleaseArtistBridge, AlbumArtistBridge
+    AlbumReleaseArtistBridge, AlbumArtistBridge, CollectionAlbumBridge, CollectionAlbumFormat
 from models.appmodels import CollectionSimple, CollectionSimpleRead, PaginatedResponse, AlbumReleaseFlat
 from uuid import UUID
 from fastapi import HTTPException
 import csv
 from sqlmodel.ext.asyncio.session import AsyncSession
-from sqlmodel import select
-
+from sqlmodel import select, delete
+from sqlalchemy.dialects.postgresql import insert
+from mutagen import File as MutagenFile
+import os
 import asyncio
 import re
 from dependencies.musicbrainz_api import MusicBrainzAPI
 from dependencies.discogs_api import DiscogsAPI
-from models.sqlmodels import DiscogsToken
+from models.sqlmodels import DiscogsToken, Collection, CollectionTrack
 from services.musicbrainz_service import MusicBrainzService
 from services.discogs_service import DiscogsService
 from config import settings
@@ -26,6 +28,8 @@ discogs_api = DiscogsAPI()
 class CollectionService:
     def __init__(self, db: AsyncSession):
         self.db = db
+        self.musicbrainz_service = MusicBrainzService(db, MusicBrainzAPI())
+        self.discogs_service = DiscogsService(db, discogs_api)
 
     async def get_or_create_collection(self, user_uuid: str, collection_name: str):
         """Helper function to check if a user exists and create it if not."""
@@ -39,18 +43,28 @@ class CollectionService:
         return await self.get_collection_simple(collection.collection_uuid)
 
     async def get_collection(self, collection_id: UUID) -> CollectionSimpleRead:
-        """Retrieve a single album based on UUID."""
-        result = await self.db.execute(select(Collection).where(Collection.user_uuid == collection_id)
-        .options(
-            selectinload(Collection.albums).selectinload(Album.artists),  # Eager load albums and their artists
-            selectinload(Collection.albums).selectinload(Album.tracks),  # Eager load albums and their tracks
-            selectinload(Collection.album_releases).selectinload(AlbumRelease.artists)
-            # Eager load album releases and their artists
-        ))
+        result = await self.db.execute(
+            select(Collection)
+            .where(Collection.collection_uuid == collection_id)
+            .options(
+                selectinload(Collection.albums)
+                .selectinload(Album.artists),
+                selectinload(Collection.albums)
+                .selectinload(Album.tracks),
+                selectinload(Collection.albums)
+                .selectinload(Album.collectionalbumbridge_collection)  # bridge
+                .selectinload(CollectionAlbumBridge.formats),  # 🔥 load formats
+                selectinload(Collection.album_releases)
+                .selectinload(AlbumRelease.artists),
+                selectinload(Collection.tracks)
+                .selectinload(CollectionTrack.track_version)
+                .selectinload(TrackVersion.album_releases),  # so releases are available
+            )
+        )
         collection = result.scalar_one_or_none()
         if not collection:
-            raise HTTPException(status_code=404, detail="Album not found")
-        return CollectionSimpleRead.model_validate(collection)  # Use model_validate instead of parse_obj
+            raise HTTPException(status_code=404, detail="Collection not found")
+        return CollectionSimpleRead.model_validate(collection)
 
     async def get_primary_collection(
         self,
@@ -108,6 +122,9 @@ class CollectionService:
             .limit(limit)
             .options(
                 selectinload(AlbumRelease.album).selectinload(Album.artists),
+                selectinload(AlbumRelease.album)
+                .selectinload(Album.collectionalbumbridge)  # ✅ correct attribute
+                .selectinload(CollectionAlbumBridge.formats),  # ✅ formats now load
                 selectinload(AlbumRelease.artists),
             )
         )
@@ -123,9 +140,17 @@ class CollectionService:
         )
 
     async def get_collection_simple(self, collection_id: UUID) -> CollectionSimple:
-        """Retrieve a single album based on UUID."""
-        result = await self.db.execute(select(Collection).where(Collection.collection_uuid == collection_id).options(
-            selectinload(Collection.albums), selectinload(Collection.album_releases)))
+        result = await self.db.execute(
+            select(Collection)
+            .where(Collection.collection_uuid == collection_id)
+            .options(
+                selectinload(Collection.albums)
+                .selectinload(Album.types),  # ✅ add this
+                selectinload(Collection.album_releases),
+                selectinload(Collection.tracks)
+                .selectinload(CollectionTrack.track_version),
+            )
+        )
         collection = result.scalar_one_or_none()
         if not collection:
             raise HTTPException(status_code=404, detail="Album not found")
@@ -286,3 +311,239 @@ class CollectionService:
         print(f"Matched {len(matched_releases)} / {len(new_releases)}")
         print(unmatched_releases)
         return {"matched": matched_releases, "unmatched": unmatched_releases}
+
+    async def _resolve_album_via_mb(self, artist: str, album: str):
+        # Use MB search API to find release
+        release_id = await self.musicbrainz_service.api.get_first_release_id_by_artist_and_album(artist, album)
+        return release_id
+
+    def _get_file_format_and_quality(self, meta, ext: str) -> tuple[str | None, str | None]:
+        fmt, quality = None, None
+
+        if ext == ".flac":
+            fmt = "FLAC"
+            # FLAC is lossless, but we can add resolution
+            bits = getattr(meta.info, "bits_per_sample", None)
+            rate = getattr(meta.info, "sample_rate", None)
+            if bits and rate:
+                quality = f"{bits}-bit / {rate // 1000}kHz"
+            else:
+                quality = "Lossless"
+
+        elif ext == ".mp3":
+            fmt = "MP3"
+            br = getattr(meta.info, "bitrate", None)
+            if br:
+                quality = f"{br // 1000} kbps"
+
+        elif ext == ".ogg":
+            fmt = "OGG"
+            br = getattr(meta.info, "bitrate", None)
+            if br:
+                quality = f"{br // 1000} kbps"
+
+        elif ext == ".m4a":
+            fmt = "M4A"
+            br = getattr(meta.info, "bitrate", None)
+            if br:
+                quality = f"{br // 1000} kbps"
+
+        return fmt, quality
+
+
+    async def scan_directory(
+            self,
+            collection_id: UUID | None,
+            user_uuid: UUID,
+            music_dir: str = settings.MUSIC_DIR,
+            include_extensions: tuple[str] = (".flac", ".mp3", ".ogg", ".m4a"),
+            limit: int = None,
+            overwrite: bool = False,  # 🔥 new flag
+    ):
+        """
+        Walk through a directory, extract tags, resolve with MusicBrainz,
+        and persist CollectionTrack rows.
+
+        🔴 Guaranteed stop after `limit` files (success, skip, or fail).
+        """
+
+        def normalize(s: str | None) -> str | None:
+            if not s:
+                return None
+            return re.sub(r"\s+", " ", s.strip().lower())
+
+        # Ensure collection exists
+        if not collection_id:
+            collection = await self.get_or_create_collection(user_uuid, "Local Music Collection")
+            collection_id = collection.collection_uuid
+
+            # Ensure collection exists
+            if not collection_id:
+                collection = await self.get_or_create_collection(user_uuid, "Local Music Collection")
+                collection_id = collection.collection_uuid
+
+            if overwrite:
+                # Wipe collection before scanning
+                await self.db.execute(
+                    delete(CollectionTrack).where(CollectionTrack.collection_uuid == collection_id)
+                )
+                await self.db.execute(
+                    delete(CollectionAlbumReleaseBridge).where(
+                        CollectionAlbumReleaseBridge.collection_uuid == collection_id)
+                )
+                await self.db.execute(
+                    delete(CollectionAlbumBridge).where(CollectionAlbumBridge.collection_uuid == collection_id)
+                )
+                await self.db.execute(
+                    delete(CollectionAlbumFormat).where(CollectionAlbumFormat.collection_uuid == collection_id)
+                )
+                await self.db.commit()
+                logger.info(f"Overwriting existing collection {collection_id} – flushed tracks/releases/albums.")
+
+        attempts = 0
+        successes = 0
+        release_cache: dict[tuple[str, str], str] = {}  # (artist, album) -> release_id
+
+
+        for root, _, files in os.walk(music_dir):
+            dir_successes = 0
+            dir_attempts = 0
+            current_artist, current_album = None, None
+
+            for fname in files:
+                if not fname.lower().endswith(include_extensions):
+                    continue
+
+                # 🔴 Count this file immediately
+                attempts += 1
+                dir_attempts += 1
+                if limit:
+                    if attempts > limit:
+                        logger.info(
+                            f"Stopping after {limit} files "
+                            f"({successes} successes, {attempts - successes} failures/skips)."
+                        )
+                        return
+
+                path = os.path.join(root, fname)
+                try:
+                    meta = MutagenFile(path)
+                    if not meta or not meta.tags:
+                        continue
+                    tags = {k.lower(): v for k, v in meta.tags.items()}
+
+                    artist = tags.get("artist", [None])[0]
+                    album = tags.get("album", [None])[0]
+                    title = tags.get("title", [None])[0]
+                    mb_albumid = tags.get("musicbrainz_albumid", [None])[0]
+                    mb_trackid = tags.get("musicbrainz_trackid", [None])[0]
+
+                    if not artist or not album or not title:
+                        continue
+
+                    current_artist, current_album = artist, album
+
+                    # 🔒 Normalize cache key
+                    cache_key = (normalize(artist), normalize(album))
+
+                    # Resolve release_id
+                    release_id: str | None = mb_albumid
+                    if not release_id:
+                        if cache_key in release_cache:
+                            release_id = release_cache[cache_key]
+                        else:
+                            release_id = await self._resolve_album_via_mb(artist, album)
+                            if not release_id:
+                                continue
+                            release_cache[cache_key] = release_id
+
+                    # 1. get or create album + release (+tracks/versions)
+                    album_obj, album_release = (
+                        await self.musicbrainz_service.get_or_create_album_from_musicbrainz_release(
+                            str(release_id)
+                        )
+                    )
+
+                    # 2. get or create track_version
+                    track_version = await self.musicbrainz_service.get_or_create_track_version(
+                        str(release_id),
+                        title,
+                        mb_trackid,
+                    )
+                    if not track_version:
+                        continue
+
+                    # 3. skip if already in collection
+                    result = await self.db.execute(
+                        select(CollectionTrack).where(
+                            CollectionTrack.collection_uuid == collection_id,
+                            CollectionTrack.track_version_uuid == track_version.track_version_uuid,
+                        )
+                    )
+                    if result.scalar_one_or_none():
+                        continue
+
+                    # 4. persist new CollectionTrack
+                    ext = os.path.splitext(fname)[1].lower()
+                    fmt, quality = self._get_file_format_and_quality(meta, ext)
+
+                    ct = CollectionTrack(
+                        collection_uuid=collection_id,
+                        track_version_uuid=track_version.track_version_uuid,
+                        path=path,
+                        format=fmt,
+                        quality=quality,
+                    )
+                    self.db.add(ct)
+
+
+                    album_uuid = album_obj.album_uuid
+                    album_release_uuid = album_release.album_release_uuid
+
+                    # CollectionAlbumBridge
+                    stmt = insert(CollectionAlbumBridge).values(
+                        album_uuid=album_uuid,
+                        collection_uuid=collection_id
+                    ).on_conflict_do_nothing()
+                    await self.db.execute(stmt)
+
+                    # CollectionAlbumReleaseBridge
+                    stmt = insert(CollectionAlbumReleaseBridge).values(
+                        album_release_uuid=album_release_uuid,
+                        collection_uuid=collection_id
+                    ).on_conflict_do_nothing()
+                    await self.db.execute(stmt)
+
+                    # CollectionAlbumFormat (mark digital owned)
+                    stmt = insert(CollectionAlbumFormat).values(
+                        collection_uuid=collection_id,
+                        album_uuid=album_uuid,
+                        format="digital",
+                        status="owned"
+                    ).on_conflict_do_nothing()
+                    await self.db.execute(stmt)
+
+                    # 🔴 commit each addition
+                    await self.db.commit()
+                    dir_successes += 1
+                    successes += 1
+
+
+                except Exception as e:
+                    logger.error(f"❌ Error processing {path}: {e}")
+
+            if dir_attempts > 0 and current_artist and current_album:
+                logger.info(
+                    f"Added {current_artist}, {current_album} "
+                    f"{dir_successes}/{dir_attempts} tracks"
+                )
+
+        logger.info(
+            f"Scan finished: {attempts} files processed "
+            f"({successes} successes, {attempts - successes} failures/skips)."
+        )
+
+
+
+
+
