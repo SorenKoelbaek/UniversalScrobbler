@@ -55,3 +55,4 @@ class WebSocketService:
         if user_uuid in self.sse_clients:
             await self.sse_clients[user_uuid].put(message)
 
+websocket_service = WebSocketService()

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Request, Depends
 from sse_starlette.sse import EventSourceResponse
 from typing import AsyncIterator
 from dependencies.auth import get_current_user
-from services.websocket_service import WebSocketService
+from services.websocket_service import websocket_service
 from fastapi.encoders import jsonable_encoder
 from models.sqlmodels import User
 import logging
@@ -19,7 +19,8 @@ async def event_stream(request: Request, user: User = Depends(get_current_user))
     """
     SSE endpoint for a specific user's updates.
     """
-    queue = WebSocketService.add_sse_client(user.user_uuid)
+    # ✅ add client queue
+    queue = websocket_service.add_sse_client(user.user_uuid)
 
     async def event_publisher() -> AsyncIterator[str]:
         try:
@@ -34,6 +35,7 @@ async def event_stream(request: Request, user: User = Depends(get_current_user))
                     # Send a ping every 5 seconds to keep the connection alive
                     yield ":\n\n"
         finally:
-            WebSocketService.remove_sse_client(user.user_uuid)
+            # ✅ remove using the instance
+            websocket_service.remove_sse_client(user.user_uuid)
 
     return EventSourceResponse(event_publisher())
