@@ -50,10 +50,10 @@ const PlaybackTrackList = ({ plays }) => {
               <TableCell>
                 {play.album_uuid ? (
                   <Link href={`/album/${play.album_uuid}`} underline="hover">
-                    {play.album_title || "Unknown"}
+                    {play.title || "Unknown"}
                   </Link>
                 ) : (
-                  play.album_title || "Unknown"
+                  play.title || "Unknown"
                 )}
               </TableCell>
               <TableCell>

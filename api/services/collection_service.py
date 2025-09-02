@@ -3,7 +3,7 @@ from sqlalchemy.orm import selectinload
 
 from models.sqlmodels import Collection, Album, CollectionAlbumReleaseBridge, Artist, AlbumRelease, \
     AlbumReleaseArtistBridge, AlbumArtistBridge, CollectionAlbumBridge, CollectionAlbumFormat
-from models.appmodels import CollectionSimple, CollectionSimpleRead, PaginatedResponse, AlbumReleaseFlat
+from models.appmodels import CollectionSimple, CollectionSimpleRead, PaginatedResponse, AlbumFlat
 from uuid import UUID
 from fastapi import HTTPException
 import csv
@@ -67,12 +67,12 @@ class CollectionService:
         return CollectionSimpleRead.model_validate(collection)
 
     async def get_primary_collection(
-        self,
-        user_uuid: UUID,
-        offset: int = 0,
-        limit: int = 100,
-        search: str | None = None,
-    ) -> PaginatedResponse[AlbumReleaseFlat]:
+            self,
+            user_uuid: UUID,
+            offset: int = 0,
+            limit: int = 100,
+            search: str | None = None,
+    ) -> PaginatedResponse[AlbumFlat]:
         # Fetch the user's collection
         result = await self.db.execute(
             select(Collection).where(Collection.user_uuid == user_uuid)
@@ -82,10 +82,10 @@ class CollectionService:
             raise HTTPException(status_code=404, detail="Collection not found")
 
         base_query = (
-            select(AlbumRelease)
+            select(Album)
+            .join(AlbumRelease, Album.album_uuid == AlbumRelease.album_uuid)
             .join(CollectionAlbumReleaseBridge,
                   CollectionAlbumReleaseBridge.album_release_uuid == AlbumRelease.album_release_uuid)
-            .join(Album, Album.album_uuid == AlbumRelease.album_uuid)  # 🔥 joining Album now
             .where(CollectionAlbumReleaseBridge.collection_uuid == collection.collection_uuid)
         )
 
@@ -94,7 +94,7 @@ class CollectionService:
 
             artist_match = exists(
                 select(1)
-                .select_from(AlbumArtistBridge)  # your actual join table model
+                .select_from(AlbumArtistBridge)
                 .join(Artist, AlbumArtistBridge.artist_uuid == Artist.artist_uuid)
                 .where(AlbumArtistBridge.album_uuid == Album.album_uuid)
                 .where(func.lower(Artist.name).ilike(search_term))
@@ -104,39 +104,34 @@ class CollectionService:
 
             base_query = base_query.where(or_(title_match, artist_match))
 
-        # Total count (distinct)
+        # Total count
         total_query = base_query.with_only_columns(
-            func.count(func.distinct(AlbumRelease.album_release_uuid))
+            func.count(func.distinct(Album.album_uuid))
         )
         total_result = await self.db.execute(total_query)
         total = total_result.scalar_one()
 
-        matching_ids_query = base_query.with_only_columns(AlbumRelease.album_release_uuid).distinct()
-        ids_result = await self.db.execute(matching_ids_query)
-
         # Apply pagination and eager loading
-        releases_query = (
+        albums_query = (
             base_query
-            .distinct(AlbumRelease.album_release_uuid)
+            .distinct(Album.album_uuid)
             .offset(offset)
             .limit(limit)
             .options(
-                selectinload(AlbumRelease.album).selectinload(Album.artists),
-                selectinload(AlbumRelease.album)
-                .selectinload(Album.collectionalbumbridge)  # ✅ correct attribute
-                .selectinload(CollectionAlbumBridge.formats),  # ✅ formats now load
-                selectinload(AlbumRelease.artists),
+                selectinload(Album.artists),
+                selectinload(Album.releases),
+                selectinload(Album.collectionalbumbridge).selectinload(CollectionAlbumBridge.formats),
             )
         )
 
-        releases_result = await self.db.execute(releases_query)
-        album_releases = releases_result.scalars().all()
+        albums_result = await self.db.execute(albums_query)
+        albums = albums_result.scalars().all()
 
-        return PaginatedResponse[AlbumReleaseFlat](
+        return PaginatedResponse[AlbumFlat](
             total=total,
             offset=offset,
             limit=limit,
-            items=[AlbumReleaseFlat.model_validate(r) for r in album_releases],
+            items=[AlbumFlat.model_validate(a) for a in albums],
         )
 
     async def get_collection_simple(self, collection_id: UUID) -> CollectionSimple:
@@ -145,7 +140,7 @@ class CollectionService:
             .where(Collection.collection_uuid == collection_id)
             .options(
                 selectinload(Collection.albums)
-                .selectinload(Album.types),  # ✅ add this
+                .selectinload(Album.types),
                 selectinload(Collection.album_releases),
                 selectinload(Collection.tracks)
                 .selectinload(CollectionTrack.track_version),
@@ -185,9 +180,46 @@ class CollectionService:
         print(f"Loaded {len(collection)} releases from CSV file")
         return collection
 
+    async def _link_release_to_collection(
+            self,
+            collection_id: UUID,
+            album: Album,
+            album_release: AlbumRelease,
+            fmt: str = "digital",
+            status: str = "owned",
+    ):
+        album_uuid = album.album_uuid
+        album_release_uuid = album_release.album_release_uuid
+
+        # Album bridge
+        stmt = insert(CollectionAlbumBridge).values(
+            album_uuid=album_uuid,
+            collection_uuid=collection_id
+        ).on_conflict_do_nothing()
+        await self.db.execute(stmt)
+
+        # Release bridge
+        stmt = insert(CollectionAlbumReleaseBridge).values(
+            album_release_uuid=album_release_uuid,
+            collection_uuid=collection_id
+        ).on_conflict_do_nothing()
+        await self.db.execute(stmt)
+
+        # Format
+        stmt = insert(CollectionAlbumFormat).values(
+            collection_uuid=collection_id,
+            album_uuid=album_uuid,
+            format=fmt,
+            status=status
+        ).on_conflict_do_nothing()
+        await self.db.execute(stmt)
+
+        await self.db.commit()
+
     async def process_collection(self, user_uuid: str, csv_file_path: str = None):
         if not user_uuid:
             raise HTTPException(status_code=400, detail="user_uuid is required")
+
         session = self.db
         matched_releases = []
         unmatched_releases = []
@@ -196,59 +228,72 @@ class CollectionService:
         musicbrainz_api = MusicBrainzAPI()
         discogs_service = DiscogsService(session, discogs_api)
         musicbrainz_service = MusicBrainzService(session, musicbrainz_api)
+
+        # Get auth
         result = await session.exec(select(DiscogsToken).where(DiscogsToken.user_uuid == user_uuid))
         auth = result.first()
         token = auth.access_token
         secret = auth.access_token_secret
 
+        # Ensure collection exists
         collection = await self.get_or_create_collection(user_uuid, "Discogs main collection")
+
+        # Either load from CSV or API
         collection_to_process = (
             await self.read_collection_from_csv(csv_file_path)
             if csv_file_path else
             discogs_api.get_collection(token, secret)
         )
 
+        # Existing release IDs already linked
         existing_release_ids = {r.discogs_release_id for r in collection.album_releases}
 
         new_releases = [r for r in collection_to_process if r["discogs_release_id"] not in existing_release_ids]
         logger.info(f"Found {len(new_releases)} new releases to process")
-        for index, release_info in enumerate(new_releases):
 
+        for index, release_info in enumerate(new_releases):
             discogs_release_id = release_info["discogs_release_id"]
             logger.info(f"Processing {index + 1}/{len(new_releases)}: Discogs ID {discogs_release_id}")
+
             try:
+                # Already in DB?
                 result = await session.exec(
                     select(AlbumRelease).where(AlbumRelease.discogs_release_id == discogs_release_id)
                 )
                 albumrelease = result.first()
 
                 if albumrelease:
-                    await musicbrainz_service.link_release_to_collection(
-                        albumrelease.album_release_uuid, collection.collection_uuid
+                    await self._link_release_to_collection(
+                        collection.collection_uuid,
+                        albumrelease.album,
+                        albumrelease,
+                        fmt="vinyl"
                     )
-                    print("✅ Linked existing album release")
-                    await session.commit()
+                    logger.info("✅ Linked existing album release (vinyl)")
                     continue
 
-                await asyncio.sleep(1)
+                # Try MB mapping
+                await asyncio.sleep(1)  # be gentle with API
                 musicbrainz_release_id = await musicbrainz_api.get_release_by_discogs_url(discogs_release_id)
                 if musicbrainz_release_id:
                     album, albumrelease = await musicbrainz_service.get_or_create_album_from_musicbrainz_release(
                         musicbrainz_release_id, discogs_release_id
                     )
-
                     if albumrelease:
-                        await musicbrainz_service.link_release_to_collection(
-                            albumrelease.album_release_uuid, collection.collection_uuid
+                        await self._link_release_to_collection(
+                            collection.collection_uuid,
+                            album,
+                            albumrelease,
+                            fmt="vinyl"
                         )
                         matched_releases.append({
                             "discogs_id": discogs_release_id,
                             "musicbrainz_id": musicbrainz_release_id,
                         })
-                        print(f"linked {musicbrainz_release_id} to {discogs_release_id}")
-                        await session.commit()
+                        logger.info(f"linked {musicbrainz_release_id} to {discogs_release_id}")
                         continue
 
+                # Fallback: match by artist/title
                 artistname = release_info.get("artist")
                 title = release_info.get("title")
                 if not artistname or not title:
@@ -258,8 +303,8 @@ class CollectionService:
                         title = discogs_release.get("title")
                     else:
                         unmatched_releases.append(release_info)
-                        await session.rollback()
                         continue
+
                 artistname = re.sub(r'\s*\(\d+\)\s*$', '', artistname)
                 new_id = await musicbrainz_api.get_first_release_id_by_artist_and_album(artistname, title)
 
@@ -270,46 +315,52 @@ class CollectionService:
 
                     if albumrelease:
                         if albumrelease.discogs_release_id != discogs_release_id:
-                            albumbumrelease = await musicbrainz_service.clone_album_release_with_links(
-                                albumrelease.album_release_uuid, discogs_release_id)
-                            await musicbrainz_service.link_release_to_collection(
-                                albumbumrelease.album_release_uuid, collection.collection_uuid
+                            # clone with new Discogs link
+                            new_albumrelease = await musicbrainz_service.clone_album_release_with_links(
+                                albumrelease.album_release_uuid, discogs_release_id
                             )
-                            matched_releases.append({
-                                "discogs_id": discogs_release_id,
-                                "musicbrainz_id": new_id,
-                            })
+                            await self._link_release_to_collection(
+                                collection.collection_uuid,
+                                new_albumrelease.album,
+                                new_albumrelease,
+                                fmt="vinyl"
+                            )
                         else:
-                            await musicbrainz_service.link_release_to_collection(
-                                albumrelease.album_release_uuid, collection.collection_uuid
+                            await self._link_release_to_collection(
+                                collection.collection_uuid,
+                                album,
+                                albumrelease,
+                                fmt="vinyl"
                             )
-                            matched_releases.append({
-                                "discogs_id": discogs_release_id,
-                                "musicbrainz_id": new_id,
-                            })
 
-                        await session.commit()
+                        matched_releases.append({
+                            "discogs_id": discogs_release_id,
+                            "musicbrainz_id": new_id,
+                        })
                         continue
 
+                # Final fallback: Discogs only
                 album, albumrelease = await discogs_service.get_or_create_album_from_release(
                     discogs_release_id, token, secret
                 )
                 if albumrelease:
-                    await musicbrainz_service.link_release_to_collection(
-                        albumrelease.album_release_uuid, collection.collection_uuid
+                    await self._link_release_to_collection(
+                        collection.collection_uuid,
+                        album,
+                        albumrelease,
+                        fmt="vinyl"
                     )
-                    await session.commit()
+                    logger.info(f"✅ Linked via Discogs only {discogs_release_id}")
                 else:
-                    print(f"❌ Error processing release {discogs_release_id}: No albumrelease returned")
-                    await session.rollback()
+                    logger.error(f"❌ Error processing release {discogs_release_id}: No albumrelease returned")
+                    unmatched_releases.append(release_info)
 
             except Exception as e:
-                print(f"❌ Error processing release {discogs_release_id}: {e}")
+                logger.error(f"❌ Error processing release {discogs_release_id}: {e}")
+                unmatched_releases.append(release_info)
                 await session.rollback()
 
-        print(f"\nSummary:")
-        print(f"Matched {len(matched_releases)} / {len(new_releases)}")
-        print(unmatched_releases)
+        logger.info(f"\nSummary: Matched {len(matched_releases)} / {len(new_releases)}")
         return {"matched": matched_releases, "unmatched": unmatched_releases}
 
     async def _resolve_album_via_mb(self, artist: str, album: str):

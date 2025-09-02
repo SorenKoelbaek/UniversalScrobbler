@@ -60,7 +60,7 @@ const Profile = () => {
   };
   const handleScanAll = async () => {
     try {
-      const res = await apiClient.post("/collection/scan");
+      const res = await apiClient.post("/collection/scan?overwrite=false");
       if (res.data.url) {
         window.location.href = res.data.url;
       } else {

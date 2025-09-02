@@ -552,17 +552,17 @@ class MusicBrainzService:
             # Fetch the full recording data using recordings_by_id
             recording_details = recordings_by_id.get(recording_id, {})
 
-            # Track creation
+            # Track creation (by title + duration)
             result = await self.db.execute(
                 select(Track).where(Track.name == title, Track.duration == length)
             )
             track = result.scalar_one_or_none()
             if not track:
-                track = Track(name=title, duration=length if length else None,)
+                track = Track(name=title, duration=length if length else None)
                 self.db.add(track)
                 await self.db.flush()
 
-            # Link Track ↔ Album
+            # 🔑 Always ensure Track ↔ Album link
             result = await self.db.execute(
                 select(TrackAlbumBridge).where(
                     TrackAlbumBridge.track_uuid == track.track_uuid,
@@ -609,7 +609,6 @@ class MusicBrainzService:
             album_artists_result = await self.db.execute(
                 select(Artist).join(AlbumArtistBridge).where(AlbumArtistBridge.album_uuid == album.album_uuid)
             )
-
             album_artists = album_artists_result.scalars().all()
             for artist in album_artists:
                 result = await self.db.execute(
@@ -629,40 +628,34 @@ class MusicBrainzService:
                 artist_data = credit.get("artist")
                 if artist_data:
                     artist = await self.get_or_create_artist_by_name(artist_data["name"])
-                    if artist.artist_uuid not in [a.artist_uuid for a in track.artists]:
-                        result = await self.db.execute(
-                            select(TrackVersionExtraArtist).where(
-                                TrackVersionExtraArtist.track_version_uuid == version.track_version_uuid,
-                                TrackVersionExtraArtist.artist_uuid == artist.artist_uuid
-                            )
+                    result = await self.db.execute(
+                        select(TrackVersionExtraArtist).where(
+                            TrackVersionExtraArtist.track_version_uuid == version.track_version_uuid,
+                            TrackVersionExtraArtist.artist_uuid == artist.artist_uuid
                         )
-                        if not result.scalar_one_or_none():
-                            self.db.add(TrackVersionExtraArtist(
-                                track_version_uuid=version.track_version_uuid,
-                                artist_uuid=artist.artist_uuid,
-                                role=None
-                            ))
+                    )
+                    if not result.scalar_one_or_none():
+                        self.db.add(TrackVersionExtraArtist(
+                            track_version_uuid=version.track_version_uuid,
+                            artist_uuid=artist.artist_uuid,
+                            role=None
+                        ))
 
             # Add tags to the track version
             for tag in recording_details.get("tags", []):
                 tag_obj = await self.get_or_create_tag(tag["name"])
-                # Check if the tag already exists in the database
                 result = await self.db.execute(
-                    select(TrackVersionTagBridge)
-                    .where(TrackVersionTagBridge.track_version_uuid == version.track_version_uuid,
-                        TrackVersionTagBridge.tag_uuid == tag_obj.tag_uuid))
-                existing_tag = result.scalar_one_or_none()
-                if not existing_tag:
+                    select(TrackVersionTagBridge).where(
+                        TrackVersionTagBridge.track_version_uuid == version.track_version_uuid,
+                        TrackVersionTagBridge.tag_uuid == tag_obj.tag_uuid
+                    )
+                )
+                if not result.scalar_one_or_none():
                     self.db.add(TrackVersionTagBridge(
                         track_version_uuid=version.track_version_uuid,
                         tag_uuid=tag_obj.tag_uuid,
                         count=tag.get("count", 0)
                     ))
-
-        # Create Tracks and Versions
-
-    from uuid import uuid4
-    from sqlmodel import select
 
     async def create_tracks_and_versions_simple(
             self,

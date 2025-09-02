@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from models.appmodels import CollectionRead, CollectionSimpleRead, PaginatedResponse, AlbumReleaseFlat
+from models.appmodels import CollectionRead, CollectionSimpleRead, PaginatedResponse, AlbumFlat
 from dependencies.auth import get_current_user
 from dependencies.database import get_async_session
 from models.sqlmodels import User
@@ -17,7 +17,7 @@ router = APIRouter(
     tags=["collection"]
 )
 
-@router.get("/", response_model=PaginatedResponse[AlbumReleaseFlat])
+@router.get("/", response_model=PaginatedResponse[AlbumFlat])
 async def get_my_collections(
     search: str = Query(None),
     offset: int = Query(0, ge=0),

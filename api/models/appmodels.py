@@ -1,6 +1,6 @@
 from typing import Optional, Union
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, field_serializer, field_validator, model_validator, Field, AliasPath
+from pydantic import BaseModel, EmailStr, field_serializer, field_validator, model_validator, Field, AliasPath, computed_field
 from datetime import datetime, timezone
 from typing import Generic, TypeVar, List
 
@@ -34,7 +34,7 @@ class PlaybackHistorySimple(PlaybackHistoryBase):
     track_uuid: UUID
     album_uuid: UUID
     song_title:str = Field(..., alias=AliasPath("track", "name"))
-    album_title: str = Field(..., alias=AliasPath("album", "title"))
+    title: str = Field(..., alias=AliasPath("album", "title"))
     artists: List["ArtistBase"] = Field(..., alias=AliasPath("album", "artists"))
     release_date: Optional[datetime] = Field(..., alias=AliasPath("album", "release_date"))
     full_update: Optional[bool] = False
@@ -220,20 +220,23 @@ class CollectionAlbumFormatRead(BaseModel):
     class Config:
         from_attributes = True
 
-class AlbumReleaseFlat(BaseModel):
-    album_release_uuid: UUID
-    album_title: str = Field(..., alias=AliasPath("album", "title"))
-    album_uuid: UUID = Field(..., alias=AliasPath("album", "album_uuid"))
-    release_date: Optional[datetime] = Field(..., alias=AliasPath("album", "release_date"))
-    image_url: Optional[str] = Field(..., alias=AliasPath("album", "image_url"))
-    image_thumbnail_url: Optional[str] = Field(..., alias=AliasPath("album", "image_thumbnail_url"))
-    artists: List[ArtistBase] = Field(..., alias=AliasPath("album", "artists"))
+class AlbumFlat(BaseModel):
+    album_uuid: UUID
+    title: str = Field(alias="title")
+    release_date: Optional[datetime]
+    image_url: Optional[str]
+    image_thumbnail_url: Optional[str]
+    artists: List[ArtistBase]
+    releases: List[AlbumReleaseBase] = []
     formats: List[CollectionAlbumFormatRead] = Field(
         default_factory=list,
-        alias=AliasPath("album", "collectionalbumbridge", 0, "formats")
+        alias=AliasPath("collectionalbumbridge", 0, "formats")  # 🔑 reach through bridge
     )
+
+
     class Config:
-        from_attributes=True
+        from_attributes = True
+        populate_by_name = True
 
 # AlbumReleaseRead reflects a specific release of an album
 class AlbumReleaseRead(AlbumReleaseBase):
@@ -292,7 +295,7 @@ class CollectionSimple(CollectionBase):
         from_attributes=True
 
 class CollectionSimpleRead(CollectionBase):
-    album_releases: list[AlbumReleaseFlat]
+    albums: list[AlbumFlat]
     tracks: List[CollectionTrackRead]
 
     class Config:

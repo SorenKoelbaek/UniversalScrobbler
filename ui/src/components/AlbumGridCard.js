@@ -10,7 +10,7 @@ import { useNavigate } from "react-router-dom";
 
 const AlbumGridCard = ({ albumRelease }) => {
   const {
-    album_title,
+    title,
     image_thumbnail_url,
     release_date,
     artists,
@@ -31,12 +31,12 @@ const AlbumGridCard = ({ albumRelease }) => {
           component="img"
           height="150"
           image={image_thumbnail_url}
-          alt={album_title}
+          alt={title}
           loading="lazy"
         />
         <CardContent>
           <Typography variant="body1" noWrap>
-            {album_title}
+            {title}
           </Typography>
           <Typography variant="body2" color="text.secondary" noWrap>
             {artistNames}

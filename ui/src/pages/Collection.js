@@ -30,7 +30,7 @@ const Collection = () => {
   const [hasMore, setHasMore] = useState(true);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [sortKey, setSortKey] = useState("album_title");
+  const [sortKey, setSortKey] = useState("title");
   const [sortDir, setSortDir] = useState("asc");
   const [viewMode, setViewMode] = useState("table");
 
@@ -113,7 +113,7 @@ const Collection = () => {
         const match = (str) =>
           str?.toLowerCase().includes(search.toLowerCase());
         return (
-          match(release.album_title) ||
+          match(release.title) ||
           release.artists?.some((a) => match(a.name))
         );
       })
@@ -186,11 +186,11 @@ const Collection = () => {
               <TableHead>
                 <TableRow>
                   <TableCell>Cover</TableCell>
-                  <TableCell sortDirection={sortKey === "album_title" ? sortDir : false}>
+                  <TableCell sortDirection={sortKey === "title" ? sortDir : false}>
                     <TableSortLabel
-                      active={sortKey === "album_title"}
+                      active={sortKey === "title"}
                       direction={sortDir}
-                      onClick={() => handleSort("album_title")}
+                      onClick={() => handleSort("title")}
                     >
                       Title
                     </TableSortLabel>
@@ -214,12 +214,21 @@ const Collection = () => {
                       Country
                     </TableSortLabel>
                   </TableCell>
+                 <TableCell sortDirection={sortKey === "formats" ? sortDir : false}>
+                    <TableSortLabel
+                      active={sortKey === "formats"}
+                      direction={sortDir}
+                      onClick={() => handleSort("formats")}
+                    >
+                      Formats
+                    </TableSortLabel>
+                  </TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {filteredReleases.map((release) => (
                   <AlbumCard
-                    key={release.album_release_uuid}
+                    key={release.album_uuid}
                     albumRelease={release}
                   />
                 ))}

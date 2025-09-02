@@ -159,7 +159,7 @@ const LiveSessionCard = ({ token }) => {
                   {currentTrack.artists[0]?.name}
                 </Typography>
                 <Typography variant="caption" sx={{ opacity: 0.6 }} color="white">
-                  {currentTrack.album_title}
+                  {currentTrack.itle}
                 </Typography>
                 <Typography variant="body2" sx={{ opacity: 0.6, display: "flex", alignItems: "center" }} color="white">
                   {currentTrack.full_update && (
