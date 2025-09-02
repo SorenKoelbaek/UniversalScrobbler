@@ -39,7 +39,10 @@ def run_migrations(local: bool) -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_server_default=True,
-            include_object=include_object,  # 🆕 Added here
+            include_object=include_object,
+            render_as_batch=True,
+            transaction_per_migration=True,   # ✅ per-migration transactions
+            transaction_per_step=True         # ✅ needed for DROP INDEX CONCURRENTLY
         )
 
         with context.begin_transaction():

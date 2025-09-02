@@ -8,7 +8,6 @@ Create Date: 2025-09-02 00:41:53.483709
 from typing import Sequence, Union
 
 from alembic import op
-from alembic import context
 import sqlalchemy as sa
 import sqlmodel
 from sqlalchemy.dialects import postgresql
@@ -18,7 +17,7 @@ revision: str = 'cd4bdd68cf0f'
 down_revision: Union[str, None] = 'f166b077285e'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
-context.configure(transaction_per_migration=True)
+
 
 def upgrade() -> None:
     # Drop materialized views (biggest offenders first)
