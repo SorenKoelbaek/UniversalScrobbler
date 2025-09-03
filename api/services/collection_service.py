@@ -501,6 +501,7 @@ class CollectionService:
         attempts = 0
         successes = 0
         release_cache: dict[tuple[str, str], str] = {}  # (artist, album) -> release_id
+        placeholder_cache: dict[tuple[str, str], tuple[Album, AlbumRelease]] = {}  # for poor-quality fallbacks
 
         for root, _, files in os.walk(music_dir):
             dir_successes = 0
@@ -566,29 +567,34 @@ class CollectionService:
                             track_version.quality = "normal"
                     else:
                         # --- Fallback: placeholders with quality="poor" ---
-                        logger.warning(f"⚠ No MBID for {artist} - {album}, creating placeholder with quality=poor")
+                        if cache_key not in placeholder_cache:
+                            logger.warning(f"⚠ No MBID for {artist} - {album}, creating placeholder with quality=poor")
 
-                        # Album
-                        album_obj = Album(title=album, quality="poor")
-                        self.db.add(album_obj)
-                        await self.db.flush()
+                            # Album
+                            album_obj = Album(title=album, quality="poor")
+                            self.db.add(album_obj)
+                            await self.db.flush()
 
-                        # Artist
-                        artist_obj = await self.musicbrainz_service.get_or_create_artist_by_name(artist)
-                        self.db.add(
-                            AlbumArtistBridge(album_uuid=album_obj.album_uuid, artist_uuid=artist_obj.artist_uuid))
+                            # Artist
+                            artist_obj = await self.musicbrainz_service.get_or_create_artist_by_name(artist)
+                            self.db.add(
+                                AlbumArtistBridge(album_uuid=album_obj.album_uuid, artist_uuid=artist_obj.artist_uuid))
 
-                        # AlbumRelease
-                        album_release = AlbumRelease(
-                            album_uuid=album_obj.album_uuid,
-                            title=album,
-                            quality="poor"
-                        )
-                        self.db.add(album_release)
-                        await self.db.flush()
+                            # AlbumRelease
+                            album_release = AlbumRelease(
+                                album_uuid=album_obj.album_uuid,
+                                title=album,
+                                quality="poor"
+                            )
+                            self.db.add(album_release)
+                            await self.db.flush()
+
+                            placeholder_cache[cache_key] = (album_obj, album_release)
+
+                        album_obj, album_release = placeholder_cache[cache_key]
 
                         # Track
-                        track = Track(name=title)
+                        track = Track(name=title, quality="poor")
                         self.db.add(track)
                         await self.db.flush()
                         self.db.add(TrackAlbumBridge(track_uuid=track.track_uuid, album_uuid=album_obj.album_uuid))
@@ -666,6 +672,7 @@ class CollectionService:
             f"Scan finished: {attempts} files processed "
             f"({successes} successes, {attempts - successes} failures/skips)."
         )
+
 
 
 

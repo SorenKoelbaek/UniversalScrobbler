@@ -10,12 +10,15 @@ import {
   CircularProgress,
   Button,
   Divider,
+  IconButton,
 } from "@mui/material";
 import { useParams, Link } from "react-router-dom";
 import apiClient from "../utils/apiClient";
 import TagBubbleChart from "../components/TagBubbleChart";
 import TrackList from "../components/TrackList";
 import ReleaseList from "../components/ReleaseList";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import QueueMusicIcon from "@mui/icons-material/QueueMusic";
 
 const AlbumDetail = () => {
   const { album_uuid } = useParams();
@@ -33,6 +36,15 @@ const AlbumDetail = () => {
     }
   };
 
+  const handlePlay = (e) => {
+    e.stopPropagation(); // prevent row click navigation
+    console.log("Play album:", album_uuid);
+  };
+
+  const handleAddToQueue = (e) => {
+    e.stopPropagation();
+    console.log("Add album to queue:", album_uuid);
+  };
 
   useEffect(() => {
     const fetchAlbum = async () => {
@@ -75,72 +87,83 @@ const AlbumDetail = () => {
     : "—";
 
   return (
-    <Container maxWidth="md" sx={{ mt: 4, mb: 8 }}>
-      <Grid container spacing={4}>
-        {/* Album Artwork + Metadata */}
-        <Grid item xs={12} sm={4}>
-          <Card>
-            <CardMedia
-              component="img"
-              image={album.image_url}
-              alt={album.title}
-              sx={{ height: 240, objectFit: "cover" }}
-            />
-            <CardContent>
-              <Typography variant="h6">{album.title}</Typography>
-              <Typography variant="subtitle2">
-                {album.artists.map((artist, index) => (
-                  <React.Fragment key={artist.artist_uuid}>
-                    <Button
-                      component={Link}
-                      to={`/artist/${artist.artist_uuid}`}
-                      sx={{ padding: 0, minWidth: 0, textTransform: "none" }}
-                    >
-                      {artist.name}
-                    </Button>
-                    {index < album.artists.length - 1 && ", "}
-                  </React.Fragment>
-                ))}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Released: {formattedReleaseDate}
-              </Typography>
+    <Container maxWidth="lg" sx={{ mt: 4, mb: 8 }}>
+  <Grid container spacing={4} alignItems="flex-start">
+    {/* Left column (1/3) */}
+    <Grid item xs={12} md={4}>
+      <Card>
+        <CardMedia
+          component="img"
+          image={album.image_url}
+          alt={album.title}
+          sx={{ height: 240, objectFit: "cover" }}
+        />
+        <CardContent>
+          <Typography variant="h6">{album.title}</Typography>
+          <Typography variant="subtitle2">
+            {album.artists.map((artist, index) => (
+              <React.Fragment key={artist.artist_uuid}>
+                <Button
+                  component={Link}
+                  to={`/artist/${artist.artist_uuid}`}
+                  sx={{ padding: 0, minWidth: 0, textTransform: "none" }}
+                >
+                  {artist.name}
+                </Button>
+                {index < album.artists.length - 1 && ", "}
+              </React.Fragment>
+            ))}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Released: {formattedReleaseDate}
+          </Typography>
 
-              {album.discogs_master_id && (
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  <a
-                    href={`https://www.discogs.com/master/${album.discogs_master_id}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: "#1976d2", textDecoration: "none" }}
-                  >
-                    View on Discogs
-                  </a>
-                </Typography>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
-
-        {/* Tags + Tracklist + Releases */}
-        <Grid item xs={12} sm={8}>
-          <Box mb={3}>
-            <Typography variant="h6">Tags</Typography>
-            <Box display="flex" flexWrap="wrap" gap={1} mt={1}>
-              <TagBubbleChart tags={album.tags} />
-            </Box>
+          <Box mt={1}>
+            <IconButton size="small" color="primary" onClick={handlePlay}>
+              <PlayArrowIcon />
+            </IconButton>
+            <IconButton size="small" color="primary" onClick={handleAddToQueue}>
+              <QueueMusicIcon />
+            </IconButton>
           </Box>
 
-          <Divider sx={{ my: 3 }} />
+          {album.discogs_master_id && (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              <a
+                href={`https://www.discogs.com/master/${album.discogs_master_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "#1976d2", textDecoration: "none" }}
+              >
+                View on Discogs
+              </a>
+            </Typography>
+          )}
+        </CardContent>
+      </Card>
 
-          <TrackList tracks={album.tracks} />
+      {/* Tags directly under thumbnail */}
+      <Box mt={3}>
+        <Typography variant="h6">Tags</Typography>
+        <Box display="flex" flexWrap="wrap" gap={1} mt={1}>
+          <TagBubbleChart tags={album.tags} />
+        </Box>
+      </Box>
+    </Grid>
 
-          <Divider sx={{ my: 3 }} />
+    {/* Right column (2/3) */}
+    <Grid item xs={12} md={8}>
+      <Box mb={4}>
+        <TrackList tracks={album.tracks} />
+      </Box>
 
-          <ReleaseList releases={album.releases} />
-        </Grid>
-      </Grid>
-    </Container>
+      <Divider sx={{ my: 3 }} />
+
+      <ReleaseList releases={album.releases} />
+    </Grid>
+  </Grid>
+</Container>
+
   );
 };
 

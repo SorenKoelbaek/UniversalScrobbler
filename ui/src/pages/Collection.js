@@ -186,6 +186,7 @@ const Collection = () => {
               <TableHead>
                 <TableRow>
                   <TableCell>Cover</TableCell>
+                  <TableCell></TableCell>
                   <TableCell sortDirection={sortKey === "title" ? sortDir : false}>
                     <TableSortLabel
                       active={sortKey === "title"}

@@ -1,10 +1,12 @@
 import React from "react";
-import { TableRow, TableCell, Avatar, Typography } from "@mui/material";
+import { TableRow, TableCell, Avatar, Typography, IconButton, Box } from "@mui/material";
 import { useInView } from "react-intersection-observer";
 import { useNavigate } from "react-router-dom";
 import AlbumIcon from "@mui/icons-material/Album";       // vinyl record
 import ComputerIcon from "@mui/icons-material/Computer"; // digital
 import MusicNoteIcon from "@mui/icons-material/MusicNote"; // alt digital
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import QueueMusicIcon from "@mui/icons-material/QueueMusic";
 
 const AlbumCard = ({ albumRelease }) => {
   const {
@@ -15,7 +17,7 @@ const AlbumCard = ({ albumRelease }) => {
     artists,
     album_uuid,
     formats,
-    quality
+    quality,
   } = albumRelease;
 
   const { ref, inView } = useInView({
@@ -24,11 +26,18 @@ const AlbumCard = ({ albumRelease }) => {
   });
 
   const navigate = useNavigate();
-
   const artistNames = artists?.map((a) => a.name).join(", ") || "—";
-  const formattedDate = release_date
-    ? new Date(release_date).toLocaleDateString()
-    : "—";
+  const formattedDate = release_date ? new Date(release_date).toLocaleDateString() : "—";
+
+  const handlePlay = (e) => {
+    e.stopPropagation(); // prevent row click navigation
+    console.log("Play album:", album_uuid);
+  };
+
+  const handleAddToQueue = (e) => {
+    e.stopPropagation();
+    console.log("Add album to queue:", album_uuid);
+  };
 
   return (
     <TableRow
@@ -36,10 +45,8 @@ const AlbumCard = ({ albumRelease }) => {
       onClick={() => navigate(`/album/${album_uuid}`)}
       sx={{
         cursor: "pointer",
-        bgcolor: quality === "poor" ? "rgba(255, 0, 0, 0.18)" : "inherit",
-        "&:hover": {
-          bgcolor: quality === "poor" ? "rgba(255, 0, 0, 0.25)" : "action.hover",
-        },
+        position: "relative",
+        "&:hover .action-buttons": { opacity: 1 }, // show buttons only on hover
       }}
     >
       <TableCell ref={ref}>
@@ -52,28 +59,62 @@ const AlbumCard = ({ albumRelease }) => {
           />
         )}
       </TableCell>
+      {/* Hidden action buttons */}
+      <TableCell
+        align="right"
+        sx={{ width: 100, position: "relative" }}
+      >
+        {formats?.some(
+            (f) => f.format === "digital" && f.status === "owned"
+          ) && (
+            <Box
+              className="action-buttons"
+              sx={{
+                display: "flex",
+                gap: 1,
+                opacity: 0,
+                transition: "opacity 0.2s",
+              }}
+            >
+              <IconButton
+                size="small"
+                color="primary"
+                onClick={(e) => handlePlay(e, albumRelease.album_uuid)}
+              >
+                <PlayArrowIcon />
+              </IconButton>
+              <IconButton
+                size="small"
+                color="primary"
+                onClick={(e) => handleAddToQueue(e, albumRelease.album_uuid)}
+              >
+                <QueueMusicIcon />
+              </IconButton>
+            </Box>)}
+      </TableCell>
       <TableCell>
         <Typography variant="body1">{title}</Typography>
       </TableCell>
+
       <TableCell>{artistNames}</TableCell>
       <TableCell>{formattedDate}</TableCell>
       <TableCell>{country || "—"}</TableCell>
       <TableCell>
-          {formats?.map((f, idx) => {
-            const isOwned = f.status === "owned";
-            const iconColor = isOwned ? "primary" : "disabled";
-            // "primary" → blue (theme), "disabled" → greyed-out
+        {formats?.map((f, idx) => {
+          const isOwned = f.status === "owned";
+          const iconColor = isOwned ? "primary" : "disabled";
+          switch (f.format.toLowerCase()) {
+            case "vinyl":
+              return <AlbumIcon key={idx} color={iconColor} sx={{ mr: 1 }} />;
+            case "digital":
+              return <ComputerIcon key={idx} color={iconColor} sx={{ mr: 1 }} />;
+            default:
+              return <MusicNoteIcon key={idx} color={iconColor} sx={{ mr: 1 }} />;
+          }
+        })}
+      </TableCell>
 
-            switch (f.format.toLowerCase()) {
-              case "vinyl":
-                return <AlbumIcon key={idx} color={iconColor} sx={{ mr: 1 }} />;
-              case "digital":
-                return <ComputerIcon key={idx} color={iconColor} sx={{ mr: 1 }} />;
-              default:
-                return <MusicNoteIcon key={idx} color={iconColor} sx={{ mr: 1 }} />;
-            }
-          })}
-        </TableCell>
+
     </TableRow>
   );
 };

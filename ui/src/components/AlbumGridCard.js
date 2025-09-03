@@ -5,8 +5,11 @@ import {
   CardContent,
   Typography,
   Box,
+  IconButton
 } from "@mui/material";
 import { useNavigate } from "react-router-dom";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import QueueMusicIcon from "@mui/icons-material/QueueMusic";
 
 const AlbumGridCard = ({ albumRelease }) => {
   const {
@@ -19,6 +22,17 @@ const AlbumGridCard = ({ albumRelease }) => {
   } = albumRelease;
 
   const navigate = useNavigate();
+
+    const handlePlay = (e) => {
+    e.stopPropagation(); // prevent row click navigation
+    console.log("Play album:", album_uuid);
+  };
+
+  const handleAddToQueue = (e) => {
+    e.stopPropagation();
+    console.log("Add album to queue:", album_uuid);
+  };
+
 
   const artistNames = artists?.map((a) => a.name).join(", ") || "—";
   const formattedDate = release_date
@@ -45,6 +59,20 @@ const AlbumGridCard = ({ albumRelease }) => {
           <Typography variant="caption" color="text.secondary">
             {formattedDate}
           </Typography>
+          {formats?.some(
+            (f) => f.format === "digital" && f.status === "owned"
+          ) && (
+          <IconButton size="small" color="primary" onClick={handlePlay}>
+            <PlayArrowIcon />
+          </IconButton>
+          )}
+          {formats?.some(
+            (f) => f.format === "digital" && f.status === "owned"
+          ) && (
+          <IconButton size="small" color="primary" onClick={handleAddToQueue}>
+            <QueueMusicIcon />
+          </IconButton>
+           )}
         </CardContent>
       </Card>
     </Box>

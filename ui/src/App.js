@@ -31,7 +31,6 @@ import ListeningHistory from "./pages/ListeningHistory"; // ✅ added
 const navLinks = [
   { label: "Collection", path: "/collection" },
   { label: "Listening History", path: "/listening-history" },
-  { label: "Discover", path: "/discover" },
 ];
 
 const App = () => {

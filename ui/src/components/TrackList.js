@@ -5,9 +5,12 @@ import {
   List,
   ListItem,
   ListItemText,
-  Button,
+  IconButton,
+  Tooltip,
 } from "@mui/material";
 import { Link } from "react-router-dom";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import QueueMusicIcon from "@mui/icons-material/QueueMusic";
 
 const TrackList = ({ tracks }) => {
   if (!tracks || tracks.length === 0) return null;
@@ -28,6 +31,14 @@ const TrackList = ({ tracks }) => {
     return 0;
   });
 
+  const handlePlay = (track) => {
+    console.log("▶️ Play track:", track.track_version_uuid);
+  };
+
+  const handleQueue = (track) => {
+    console.log("➕ Add to queue:", track.track_version_uuid);
+  };
+
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
@@ -37,31 +48,57 @@ const TrackList = ({ tracks }) => {
         {sorted.map(([trackNum, group]) => (
           <React.Fragment key={trackNum}>
             <Typography variant="subtitle2" sx={{ mt: 2 }}>
-              {trackNum !== "Unnumbered" ? `Track ${trackNum}` : "Unnumbered Tracks"}
             </Typography>
             {group.map((track, idx) => (
               <ListItem
                 key={track.track_uuid}
                 disablePadding
-                sx={{ pl: 2, py: 0.5 }}
+                sx={{
+                  pl: 2,
+                  py: 0.5,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  "&:hover .track-actions": { opacity: 1 },
+                }}
               >
                 <ListItemText
                   primary={
-                    <Button
+                    <Typography
                       component={Link}
                       to={`/track/${track.track_uuid}`}
                       sx={{
-                        padding: 0,
-                        minWidth: 0,
-                        textTransform: "none",
+                        textDecoration: "none",
+                        color: "inherit",
+                        "&:hover": { textDecoration: "underline" },
                       }}
                     >
                       {track.track_number
                         ? `${track.track_number}. ${track.name}`
                         : `${idx + 1}. ${track.name}`}
-                    </Button>
+                    </Typography>
                   }
                 />
+                    <Box
+                      className="track-actions"
+                      sx={{ opacity: 0, transition: "opacity 0.2s" }}
+                    >
+                      <Tooltip title="Play">
+                        <IconButton
+                          size="small"
+                          onClick={() => handlePlay(track)}
+                        >
+                          <PlayArrowIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Add to Queue">
+                        <IconButton
+                          size="small"
+                          onClick={() => handleQueue(track)}
+                        >
+                          <QueueMusicIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
               </ListItem>
             ))}
           </React.Fragment>
