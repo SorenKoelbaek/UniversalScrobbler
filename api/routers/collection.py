@@ -43,13 +43,13 @@ async def scan_collection_directory(
     user_id = user.user_uuid
 
     async def task():
-        logger.info("Starting background scan...")
+        logger.debug("Starting background scan...")
         await collection_service.scan_directory(
             collection_id=collection_id,
             user_uuid=user_id,
             overwrite=overwrite
         )
-        logger.info("Background scan finished.")
+        logger.debug("Background scan finished.")
 
     background_tasks.add_task(task)
     return {"status": "scan started in background"}
