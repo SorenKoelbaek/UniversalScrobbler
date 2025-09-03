@@ -471,3 +471,12 @@ class CollectionTrack(SQLModel, table=True):
 
     collection: "Collection" = Relationship(back_populates="tracks")
     track_version: "TrackVersion" = Relationship(back_populates="collection_tracks")
+
+class FileScanCache(SQLModel, table=True):
+    __tablename__ = "file_scan_cache"
+
+    file_scan_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
+    path: str = Field(index=True, unique=True, nullable=False)
+    size: int = Field(nullable=False)
+    mtime: float = Field(nullable=False)  # store as UNIX timestamp
+    scanned_at: datetime = Field(default_factory=datetime.utcnow)

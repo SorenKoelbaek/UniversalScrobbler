@@ -1,6 +1,6 @@
 from sqlalchemy import func, or_, exists
 from sqlalchemy.orm import selectinload
-
+from datetime import datetime
 from models.sqlmodels import Collection, Album, CollectionAlbumReleaseBridge, Artist, AlbumRelease, \
     AlbumReleaseArtistBridge, AlbumArtistBridge, CollectionAlbumBridge, CollectionAlbumFormat, Track, TrackArtistBridge, TrackAlbumBridge, TrackVersion, TrackVersionAlbumReleaseBridge
 from models.appmodels import CollectionSimple, CollectionSimpleRead, PaginatedResponse, AlbumFlat
@@ -16,7 +16,7 @@ import asyncio
 import re
 from dependencies.musicbrainz_api import MusicBrainzAPI
 from dependencies.discogs_api import DiscogsAPI
-from models.sqlmodels import DiscogsToken, Collection, CollectionTrack
+from models.sqlmodels import DiscogsToken, Collection, CollectionTrack, FileScanCache
 from services.musicbrainz_service import MusicBrainzService
 from services.discogs_service import DiscogsService
 from config import settings
@@ -475,6 +475,7 @@ class CollectionService:
         Walk through a directory, extract tags, resolve with MusicBrainz,
         and persist CollectionTrack rows.
         Falls back to placeholder entities (quality="poor") if MBID is missing.
+        Uses FileScanCache to skip unchanged files between runs.
         """
 
         def normalize(s: str | None) -> str | None:
@@ -495,13 +496,16 @@ class CollectionService:
                 delete(CollectionAlbumBridge).where(CollectionAlbumBridge.collection_uuid == collection_id))
             await self.db.execute(
                 delete(CollectionAlbumFormat).where(CollectionAlbumFormat.collection_uuid == collection_id))
+            await self.db.execute(delete(FileScanCache))  # 🔥 clear scan cache too
             await self.db.commit()
-            logger.info(f"Overwriting existing collection {collection_id} – flushed tracks/releases/albums.")
+            logger.info(f"Overwriting existing collection {collection_id} – flushed tracks/releases/albums/cache.")
 
         attempts = 0
         successes = 0
         release_cache: dict[tuple[str, str], str] = {}  # (artist, album) -> release_id
         placeholder_cache: dict[tuple[str, str], tuple[Album, AlbumRelease]] = {}  # for poor-quality fallbacks
+
+        seen_paths: set[str] = set()  # track touched files this run
 
         for root, _, files in os.walk(music_dir):
             dir_successes = 0
@@ -523,6 +527,32 @@ class CollectionService:
 
                 path = os.path.join(root, fname)
                 try:
+                    stat = os.stat(path)
+                    size = stat.st_size
+                    mtime = stat.st_mtime
+
+                    # --- check cache ---
+                    result = await self.db.execute(
+                        select(FileScanCache).where(FileScanCache.path == path)
+                    )
+                    cached = result.scalar_one_or_none()
+
+                    if cached and cached.size == size and cached.mtime == mtime:
+                        # unchanged → skip
+                        seen_paths.add(path)
+                        continue
+
+                    # update or create cache entry
+                    if cached:
+                        cached.size = size
+                        cached.mtime = mtime
+                        cached.scanned_at = datetime.utcnow()
+                    else:
+                        cached = FileScanCache(path=path, size=size, mtime=mtime)
+                        self.db.add(cached)
+                    seen_paths.add(path)
+
+                    # --- your existing logic stays intact below ---
                     meta = MutagenFile(path)
                     if not meta or not meta.tags:
                         continue
@@ -551,7 +581,6 @@ class CollectionService:
                                 release_cache[cache_key] = release_id
 
                     if release_id:
-                        # Normal MB import
                         album_obj, album_release = (
                             await self.musicbrainz_service.get_or_create_album_from_musicbrainz_release(str(release_id))
                         )
@@ -566,21 +595,17 @@ class CollectionService:
                         if track_version:
                             track_version.quality = "normal"
                     else:
-                        # --- Fallback: placeholders with quality="poor" ---
                         if cache_key not in placeholder_cache:
                             logger.warning(f"⚠ No MBID for {artist} - {album}, creating placeholder with quality=poor")
 
-                            # Album
                             album_obj = Album(title=album, quality="poor")
                             self.db.add(album_obj)
                             await self.db.flush()
 
-                            # Artist
                             artist_obj = await self.musicbrainz_service.get_or_create_artist_by_name(artist)
                             self.db.add(
                                 AlbumArtistBridge(album_uuid=album_obj.album_uuid, artist_uuid=artist_obj.artist_uuid))
 
-                            # AlbumRelease
                             album_release = AlbumRelease(
                                 album_uuid=album_obj.album_uuid,
                                 title=album,
@@ -593,13 +618,11 @@ class CollectionService:
 
                         album_obj, album_release = placeholder_cache[cache_key]
 
-                        # Track
                         track = Track(name=title, quality="poor")
                         self.db.add(track)
                         await self.db.flush()
                         self.db.add(TrackAlbumBridge(track_uuid=track.track_uuid, album_uuid=album_obj.album_uuid))
 
-                        # TrackVersion
                         track_version = TrackVersion(
                             track_uuid=track.track_uuid,
                             duration=None,
@@ -612,7 +635,6 @@ class CollectionService:
                             album_release_uuid=album_release.album_release_uuid,
                         ))
 
-                    # --- skip if already in collection ---
                     result = await self.db.execute(
                         select(CollectionTrack).where(
                             CollectionTrack.collection_uuid == collection_id,
@@ -622,7 +644,6 @@ class CollectionService:
                     if result.scalar_one_or_none():
                         continue
 
-                    # Persist CollectionTrack
                     ext = os.path.splitext(fname)[1].lower()
                     fmt, quality = self._get_file_format_and_quality(meta, ext)
                     ct = CollectionTrack(
@@ -634,7 +655,6 @@ class CollectionService:
                     )
                     self.db.add(ct)
 
-                    # Bridges
                     stmt = insert(CollectionAlbumBridge).values(
                         album_uuid=album_obj.album_uuid,
                         collection_uuid=collection_id
@@ -667,6 +687,15 @@ class CollectionService:
                     f"Added {current_artist}, {current_album} "
                     f"{dir_successes}/{dir_attempts} tracks"
                 )
+
+        # cleanup stale cache entries
+        result = await self.db.execute(select(FileScanCache.path))
+        all_cached = {row[0] for row in result.all()}
+        missing = all_cached - seen_paths
+        if missing:
+            await self.db.execute(delete(FileScanCache).where(FileScanCache.path.in_(missing)))
+            await self.db.commit()
+            logger.info(f"Removed {len(missing)} stale cache entries")
 
         logger.info(
             f"Scan finished: {attempts} files processed "

@@ -52,13 +52,29 @@ def get_sync_engine(local: bool) -> Engine:
 	return engine
 
 # Create async engine and sessionmaker
-engine: AsyncEngine = create_async_engine(_local_postgres_connect_string, echo=False)
-async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
+engine: AsyncEngine = create_async_engine(
+    _local_postgres_connect_string,
+    echo=False,
+    pool_size=5,          # connections per worker
+    max_overflow=10,      # extra connections allowed temporarily
+    pool_timeout=30,      # wait time before giving up
+    pool_recycle=1800,    # recycle connections every 30 min
+)
+# Session factory
+async_session = async_sessionmaker(
+    engine, class_=AsyncSession, expire_on_commit=False
+)
 # Async session dependency for FastAPI
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
+    """Yield an async session and ensure proper close/rollback."""
     async with async_session() as session:
-        yield session
+        try:
+            yield session
+        finally:
+            # rollback any dangling transaction to avoid 'idle in transaction'
+            if session.in_transaction():
+                await session.rollback()
+            await session.close()
 
 # Optional utility for SQLModel performance
 def set_inherit_cache():
