@@ -683,7 +683,7 @@ class CollectionService:
                     logger.error(f"❌ Error processing {path}: {e}")
 
             if dir_attempts > 0 and current_artist and current_album:
-                logger.info(
+                logger.debug(
                     f"Added {current_artist}, {current_album} "
                     f"{dir_successes}/{dir_attempts} tracks"
                 )
