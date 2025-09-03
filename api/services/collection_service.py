@@ -550,6 +550,7 @@ class CollectionService:
                     else:
                         cached = FileScanCache(path=path, size=size, mtime=mtime)
                         self.db.add(cached)
+                    await self.db.flush()  # ✅ writes to DB without expiring the session
                     seen_paths.add(path)
 
                     # --- your existing logic stays intact below ---
