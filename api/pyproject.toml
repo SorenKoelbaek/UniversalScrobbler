@@ -39,6 +39,7 @@ torch-geometric = "^2.6.1"
 torch = "2.6.0"
 mmh3 = "^5.1.0"
 mutagen = "^1.47.0"
+gunicorn = "^23.0.0"
 
 [tool.poetry.group.dev.dependencies]
 alembic = "^1.14.0"
