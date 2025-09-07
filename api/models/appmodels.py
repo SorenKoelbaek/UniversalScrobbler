@@ -374,3 +374,30 @@ class ListenEvent(BaseModel):
     track: ListenTrack
     album: ListenAlbum
     artists: List[ListenArtist]
+
+class PlayRequest(BaseModel):
+    album_uuid: UUID
+
+class PlaybackQueueItem(BaseModel):
+    playback_queue_uuid: UUID
+    user_uuid: UUID
+    track: TrackReadSimple
+    position: int
+    added_at: datetime
+    added_by: str | None = None
+    played: bool
+    skipped: bool
+
+    class Config:
+        from_attributes = True  # ✅ allows ORM -> Pydantic conversion
+
+class PlaybackQueueSimple(BaseModel):
+    playback_queue_uuid: UUID
+    user_uuid: UUID
+    tracks: List[PlaybackQueueItem] = Field(default_factory=list)
+    next: PlaybackQueueItem | None = None
+    previous: PlaybackQueueItem | None = None
+    now_playing: PlaybackQueueItem | None = None
+
+    class Config:
+        from_attributes = True  # ✅ allows ORM -> Pydantic conversion

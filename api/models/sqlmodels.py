@@ -480,3 +480,25 @@ class FileScanCache(SQLModel, table=True):
     size: int = Field(nullable=False)
     mtime: float = Field(nullable=False)  # store as UNIX timestamp
     scanned_at: datetime = Field(default_factory=datetime.utcnow)
+
+class PlaybackQueue(SQLModel, table=True):
+    __tablename__ = "playback_queue"
+
+    playback_queue_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_uuid: UUID = Field(foreign_key="appuser.user_uuid", index=True, nullable=False)
+    track_version_uuid: UUID = Field(foreign_key="track_version.track_version_uuid", nullable=False)
+    position: int = Field(nullable=False)  # order in queue
+    added_at: datetime = Field(default_factory=now_utc_naive)
+    added_by: str | None = None  # "user", "auto", "album", etc.
+
+    # convenience flags
+    played: bool = Field(default=False)
+    skipped: bool = Field(default=False)
+
+    # Relationships
+    user: "User" = Relationship()
+    track_version: "TrackVersion" = Relationship()
+
+    __table_args__ = (
+        UniqueConstraint("user_uuid", "position", name="uq_playbackqueue_user_position"),
+    )

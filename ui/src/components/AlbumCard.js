@@ -2,6 +2,7 @@ import React from "react";
 import { TableRow, TableCell, Avatar, Typography, IconButton, Box } from "@mui/material";
 import { useInView } from "react-intersection-observer";
 import { useNavigate } from "react-router-dom";
+import apiClient from "../utils/apiClient";
 import AlbumIcon from "@mui/icons-material/Album";       // vinyl record
 import ComputerIcon from "@mui/icons-material/Computer"; // digital
 import MusicNoteIcon from "@mui/icons-material/MusicNote"; // alt digital
@@ -29,10 +30,15 @@ const AlbumCard = ({ albumRelease }) => {
   const artistNames = artists?.map((a) => a.name).join(", ") || "—";
   const formattedDate = release_date ? new Date(release_date).toLocaleDateString() : "—";
 
-  const handlePlay = (e) => {
-    e.stopPropagation(); // prevent row click navigation
-    console.log("Play album:", album_uuid);
-  };
+  const handlePlay = async (e, album_uuid) => {
+  e.stopPropagation();
+  try {
+    await apiClient.post("/playback-sessions/me/play", { album_uuid });
+    console.log("Play requested:", album_uuid);
+  } catch (err) {
+    console.error("Failed to start playback", err);
+  }
+};
 
   const handleAddToQueue = (e) => {
     e.stopPropagation();

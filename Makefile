@@ -7,6 +7,7 @@ API_DIR=api
 
 # Start both frontend (React) and backend (FastAPI) in development mode
 dev:
+	docker compose up -d redis
 	npx concurrently "cd api && poetry run uvicorn main:app --reload" "cd ui && npm start"
 
 # Build the React frontend application

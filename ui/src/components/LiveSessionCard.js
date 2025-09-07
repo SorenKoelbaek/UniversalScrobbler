@@ -31,80 +31,87 @@ const LiveSessionCard = ({ token }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [connected, setConnected] = useState(false);
   const [currentTrack, setCurrentTrack] = useState(null);
-  const [progressMs, setProgressMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
 
   const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchCurrentTrack = async () => {
+    const fetchPlaybackSession = async () => {
       try {
-        const res = await apiClient.get("/consumption/currently-playing");
-        setCurrentTrack({
-          ...res.data,
-          is_still_playing: true,
+        const res = await apiClient.get("/playback-sessions/me", {
+          headers: { Authorization: `Bearer ${token}` },
         });
-        setIsPlaying(true);
+
+        setCurrentTrack(
+          res.data.current_track ?? {
+            song_title: "—",
+            artists: [{ name: "—" }],
+            album_title: "—",
+            album_uuid: null,
+            full_update: false,
+          }
+        );
+        setIsPlaying(res.data.play_state === "playing");
       } catch (err) {
-        if (err.response?.status !== 404) {
-          console.error("Failed to load currently playing track", err);
+        console.error("❌ Failed to load playback session", err);
+      }
+    };
+
+    let ctrl = new AbortController();
+    const sseUrl = `${process.env.REACT_APP_API_URL}/events`;
+
+    fetchEventSource(sseUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      signal: ctrl.signal,
+      openWhenHidden: true, // keep alive in background
+      onopen: (response) => {
+        if (response.ok) {
+          setConnected(true);
+          console.log("✅ SSE connected");
+        } else {
+          console.error("❌ Failed to connect to SSE", response);
         }
-      }
-    };
+      },
+      onmessage: (event) => {
+          if (!event.data || event.data.trim() === "" || event.data.trim() === ":") {
+            return; // skip keepalive ping
+          }
+          try {
+            const msg = JSON.parse(event.data);
 
-    const fetchSSEStream = async () => {
-      const sseUrl = `${process.env.REACT_APP_API_URL}/events`;
-
-      try {
-        await fetchEventSource(sseUrl, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          onopen: (response) => {
-            if (response.ok) {
-              setConnected(true);
-            } else {
-              console.error("Failed to connect to SSE");
+            if (msg.message) {
+              fetchPlaybackSession();
             }
-          },
-          onmessage: (event) => {
-            if (!event.data || event.data.trim() === "" || event.data.trim() === ":") return;
+          } catch (err) {
+            console.error("Error parsing SSE event", err, event.data);
+          }
+        },
 
-            try {
-              const clean = event.data.startsWith("data: ")
-                ? event.data.slice(6).trim()
-                : event.data.trim();
+      onclose: () => {
+        console.log("❌ SSE disconnected, will retry…");
+        setConnected(false);
+      },
+      onerror: (err) => {
+        console.error("SSE Error:", err);
+        setConnected(false);
+        // allow fetch-event-source to retry automatically
+      },
+    });
 
-              const msg = JSON.parse(clean);
+    // Initial snapshot load
+    fetchPlaybackSession();
 
-              if (msg.message) {
-                setCurrentTrack(msg.message);
-                setIsPlaying(msg.message.is_still_playing ?? false);
-              }
-            } catch (err) {
-              console.error("Error parsing SSE event", err);
-            }
-          },
-          onclose: () => {
-            console.log("❌ SSE disconnected");
-            setConnected(false);
-          },
-          onerror: (err) => {
-            console.error("SSE Error: ", err);
-          },
-        });
-      } catch (error) {
-        console.error("Error with SSE connection: ", error);
-      }
+    return () => {
+      ctrl.abort(); // cleanup on unmount
     };
-
-    fetchCurrentTrack().finally(fetchSSEStream);
   }, [token]);
 
   const togglePlayPause = () => {
     setIsPlaying((prev) => !prev);
-    // TODO: hook up to your backend playback control
+    // TODO: hook up to backend playback control
   };
 
   return (
@@ -117,7 +124,11 @@ const LiveSessionCard = ({ token }) => {
             : ""}
           <Chip
             icon={
-              connected ? <StreamIcon sx={{ color: "white" }} /> : <HeartBrokenIcon sx={{ color: "white" }} />
+              connected ? (
+                <StreamIcon sx={{ color: "white" }} />
+              ) : (
+                <HeartBrokenIcon sx={{ color: "white" }} />
+              )
             }
             label=""
             color={connected ? "success" : "error"}
