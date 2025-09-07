@@ -1,6 +1,6 @@
 from typing import Optional, Union
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, field_serializer, field_validator, model_validator, Field, AliasPath, computed_field
+from pydantic import BaseModel, EmailStr, field_serializer, field_validator, model_validator, Field, AliasPath, computed_field, root_validator
 from datetime import datetime, timezone
 from typing import Generic, TypeVar, List
 
@@ -376,7 +376,19 @@ class ListenEvent(BaseModel):
     artists: List[ListenArtist]
 
 class PlayRequest(BaseModel):
-    album_uuid: UUID
+    track_uuid: Optional[UUID] = None
+    track_version_uuid: Optional[UUID] = None
+    album_uuid: Optional[UUID] = None
+    artist_uuid: Optional[UUID] = None
+
+    @root_validator(pre=True)
+    def ensure_one_field(cls, values):
+        provided = [k for k, v in values.items() if v is not None]
+        if len(provided) == 0:
+            raise ValueError("One of track_uuid, track_version_uuid, album_uuid, or artist_uuid must be provided")
+        if len(provided) > 1:
+            raise ValueError("Only one of track_uuid, track_version_uuid, album_uuid, or artist_uuid may be provided")
+        return values
 
 class PlaybackQueueItem(BaseModel):
     playback_queue_uuid: UUID
@@ -387,6 +399,8 @@ class PlaybackQueueItem(BaseModel):
     added_by: str | None = None
     played: bool
     skipped: bool
+    duration_ms: int | None = None  # ✅ add this
+    file_url: str | None = None  # ✅ for proxied file playback
 
     class Config:
         from_attributes = True  # ✅ allows ORM -> Pydantic conversion
@@ -401,3 +415,18 @@ class PlaybackQueueSimple(BaseModel):
 
     class Config:
         from_attributes = True  # ✅ allows ORM -> Pydantic conversion
+
+class NowPlayingEvent(BaseModel):
+    track_uuid: UUID
+    track_name: str
+    artist_uuid: UUID | None = None
+    artist_name: str
+    album_uuid: UUID | None = None
+    album_name: str
+    duration_ms: int | None = None
+    file_url: str | None = None
+    position_ms: int
+    play_state: str
+
+class SeekRequest(BaseModel):
+    position_ms: int

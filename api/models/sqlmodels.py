@@ -471,6 +471,7 @@ class CollectionTrack(SQLModel, table=True):
 
     collection: "Collection" = Relationship(back_populates="tracks")
     track_version: "TrackVersion" = Relationship(back_populates="collection_tracks")
+    duration_ms: int | None = Field(default=None, description="Duration of track in milliseconds")
 
 class FileScanCache(SQLModel, table=True):
     __tablename__ = "file_scan_cache"
@@ -502,3 +503,14 @@ class PlaybackQueue(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("user_uuid", "position", name="uq_playbackqueue_user_position"),
     )
+
+class PlaybackSession(SQLModel, table=True):
+    __tablename__ = "playback_session"
+
+    session_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_uuid: UUID = Field(foreign_key="appuser.user_uuid", nullable=False, unique=True)
+
+    play_state: str = Field(default="paused")
+    position_ms: int = Field(default=0)
+    active_device: str | None = None
+    updated_at: datetime = Field(default_factory=datetime.utcnow)

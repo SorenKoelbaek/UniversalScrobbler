@@ -538,22 +538,22 @@ class CollectionService:
                     cached = result.scalar_one_or_none()
 
                     if cached and cached.size == size and cached.mtime == mtime:
-                        # unchanged → skip
+                        # unchanged → skip metadata, but still ensure CollectionTrack.duration_ms
                         seen_paths.add(path)
-                        continue
-
-                    # update or create cache entry
-                    if cached:
-                        cached.size = size
-                        cached.mtime = mtime
-                        cached.scanned_at = datetime.utcnow()
+                        # fallthrough to update duration if needed
                     else:
-                        cached = FileScanCache(path=path, size=size, mtime=mtime)
-                        self.db.add(cached)
-                    await self.db.flush()  # ✅ writes to DB without expiring the session
-                    seen_paths.add(path)
+                        # update or create cache entry
+                        if cached:
+                            cached.size = size
+                            cached.mtime = mtime
+                            cached.scanned_at = datetime.utcnow()
+                        else:
+                            cached = FileScanCache(path=path, size=size, mtime=mtime)
+                            self.db.add(cached)
+                        await self.db.flush()
+                        seen_paths.add(path)
 
-                    # --- your existing logic stays intact below ---
+                    # --- metadata extraction ---
                     meta = MutagenFile(path)
                     if not meta or not meta.tags:
                         continue
@@ -564,6 +564,10 @@ class CollectionService:
                     title = tags.get("title", [None])[0]
                     mb_albumid = tags.get("musicbrainz_albumid", [None])[0]
                     mb_trackid = tags.get("musicbrainz_trackid", [None])[0]
+
+                    duration_ms = None
+                    if getattr(meta, "info", None) and getattr(meta.info, "length", None):
+                        duration_ms = int(meta.info.length * 1000)
 
                     if not artist or not album or not title:
                         continue
@@ -619,14 +623,14 @@ class CollectionService:
 
                         album_obj, album_release = placeholder_cache[cache_key]
 
-                        track = Track(name=title, quality="poor")
+                        track = Track(name=title, quality="poor", duration=duration_ms)
                         self.db.add(track)
                         await self.db.flush()
                         self.db.add(TrackAlbumBridge(track_uuid=track.track_uuid, album_uuid=album_obj.album_uuid))
 
                         track_version = TrackVersion(
                             track_uuid=track.track_uuid,
-                            duration=None,
+                            duration=duration_ms,
                             quality="poor"
                         )
                         self.db.add(track_version)
@@ -636,15 +640,24 @@ class CollectionService:
                             album_release_uuid=album_release.album_release_uuid,
                         ))
 
+                    # --- CollectionTrack handling ---
                     result = await self.db.execute(
                         select(CollectionTrack).where(
                             CollectionTrack.collection_uuid == collection_id,
                             CollectionTrack.track_version_uuid == track_version.track_version_uuid,
                         )
                     )
-                    if result.scalar_one_or_none():
+                    existing = result.scalar_one_or_none()
+
+                    if existing:
+                        # ✅ Always ensure duration_ms is filled
+                        if duration_ms and (not existing.duration_ms or existing.duration_ms != duration_ms):
+                            existing.duration_ms = duration_ms
+                            self.db.add(existing)
+                            await self.db.flush()
                         continue
 
+                    # insert new CollectionTrack
                     ext = os.path.splitext(fname)[1].lower()
                     fmt, quality = self._get_file_format_and_quality(meta, ext)
                     ct = CollectionTrack(
@@ -653,6 +666,7 @@ class CollectionService:
                         path=path,
                         format=fmt,
                         quality=quality,
+                        duration_ms=duration_ms,  # ✅ always per-file
                     )
                     self.db.add(ct)
 
@@ -702,8 +716,6 @@ class CollectionService:
             f"Scan finished: {attempts} files processed "
             f"({successes} successes, {attempts - successes} failures/skips)."
         )
-
-
 
 
 

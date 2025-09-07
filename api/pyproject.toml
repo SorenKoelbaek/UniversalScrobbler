@@ -46,6 +46,7 @@ redis = {extras = ["async"], version = "^6.4.0"}
 alembic = "^1.14.0"
 aiosqlite = "^0.21.0"
 pytest-asyncio = "^0.26.0"
+redis = "^6.4.0"
 
 [build-system]
 requires = ["poetry-core"]

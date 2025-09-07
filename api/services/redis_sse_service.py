@@ -6,8 +6,10 @@ from uuid import UUID
 from typing import Dict, AsyncIterator
 
 import dependencies.redis as redis_dep  # 👈 import the module, not the variable
-from fastapi import Request
+from dependencies.database import get_async_session
+from services.playback_service import PlaybackService
 from fastapi.encoders import jsonable_encoder
+from fastapi import Request
 
 logger = logging.getLogger(__name__)
 
@@ -28,34 +30,67 @@ class RedisSSEService:
         """Register a new SSE client and return its queue."""
         q = asyncio.Queue(maxsize=50)
         self._queues[user_uuid] = q
-        logger.debug(
-            f"➕ Added SSE client for {user_uuid}. "
-            f"Active clients: {list(self._queues.keys())}"
-        )
+        logger.debug(f"➕ Added SSE client for {user_uuid}. Active: {list(self._queues.keys())}")
         return q
 
     def remove_client(self, user_uuid: UUID) -> None:
         """Remove an SSE client queue when the user disconnects."""
         if user_uuid in self._queues:
             del self._queues[user_uuid]
-            logger.info(
-                f"➖ Removed SSE client for {user_uuid}. "
-                f"Active clients: {list(self._queues.keys())}"
-            )
+            logger.info(f"➖ Removed SSE client for {user_uuid}. Active: {list(self._queues.keys())}")
 
-    async def stream(self, request: Request, user_uuid: str) -> AsyncIterator[str]:
+    async def stream(self, request: Request, user_uuid: str):
         uuid_obj = UUID(user_uuid)
         queue = self.add_client(uuid_obj)
-        yield f"{json.dumps({"message": "connected"})}\n\n"
 
+        # 🔹 Send initial snapshot (compact form)
+        try:
+            db_gen = get_async_session()
+            db = await anext(db_gen)
+            try:
+                service = PlaybackService(db, redis_dep.redis_client)
+                state = await service.get_state(uuid_obj)
+
+                initial_payload = {
+                    "rev": 1,
+                    "type": "timeline",
+                    "ts": int(asyncio.get_running_loop().time() * 1000),
+                }
+
+                if state.now_playing:
+                    now_playing = {
+                        "track_uuid": str(state.now_playing.track.track_uuid),
+                        "title": state.now_playing.track.name,
+                        "artist": (
+                            state.now_playing.track.artists[0].name
+                            if state.now_playing.track.artists else "—"
+                        ),
+                        "album": (
+                            state.now_playing.track.albums[0].title
+                            if state.now_playing.track.albums else "—"
+                        ),
+                        "duration_ms": state.now_playing.duration_ms,
+                        "file_url": state.now_playing.file_url,
+                        "position_ms": 0,
+                    }
+                    initial_payload["now_playing"] = now_playing
+                    initial_payload["play_state"] = "paused"
+
+                yield f"{json.dumps(jsonable_encoder(initial_payload))}\n\n"
+                logger.debug(f"📡 Sent initial snapshot to {user_uuid}: {initial_payload}")
+            finally:
+                await db_gen.aclose()
+        except Exception as e:
+            logger.error(f"❌ Failed to send initial snapshot for {user_uuid}: {e}")
+
+        # 🔹 Process queue
         try:
             while True:
                 if await request.is_disconnected():
                     break
                 try:
                     message = await asyncio.wait_for(queue.get(), timeout=5)
-                    payload = jsonable_encoder({"message": message})
-                    yield f"{json.dumps(payload)}\n\n"
+                    yield f"{json.dumps(jsonable_encoder(message))}\n\n"
                 except asyncio.TimeoutError:
                     yield ":\n\n"  # keepalive
         finally:
@@ -63,14 +98,13 @@ class RedisSSEService:
 
     async def _listen(self):
         """Background Redis pubsub listener that dispatches messages to queues."""
-
         if redis_dep.redis_client is None:
             return
 
         try:
             pubsub = redis_dep.redis_client.pubsub()
             await pubsub.psubscribe("us:user:*")
-            await pubsub.ping(ignore_subscribe_messages=True)
+            await pubsub.ping()
         except Exception as e:
             logger.exception(f"💥 Failed during pubsub.psubscribe: {e}")
             raise
@@ -93,15 +127,11 @@ class RedisSSEService:
                         if q:
                             if q.full():
                                 dropped = q.get_nowait()
-                                logger.warning(
-                                    f"⚠️ Queue full for {user_uuid}, dropped oldest: {dropped}"
-                                )
+                                logger.warning(f"⚠️ Queue full for {user_uuid}, dropped: {dropped}")
                             await q.put(data)
-                            logger.info(f"➡️ Enqueued SSE for {user_uuid}")
+                            logger.info(f"➡️ Enqueued SSE for {user_uuid}: {data}")
                         else:
-                            logger.debug(
-                                f"👀 No SSE client found for {user_uuid}, skipping"
-                            )
+                            logger.debug(f"👀 No SSE client for {user_uuid}, skipping")
 
                 except Exception as e:
                     logger.error(f"❌ Failed to handle pubsub message: {e}")

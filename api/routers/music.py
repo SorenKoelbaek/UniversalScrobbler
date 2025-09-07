@@ -4,9 +4,11 @@ from models.appmodels import AlbumRead, ArtistRead, TrackRead, MusicSearchRespon
 from services.music_service import MusicService
 from dependencies.database import get_async_session
 from dependencies.auth import get_current_user
-from models.sqlmodels import User
+from models.sqlmodels import User, CollectionTrack
+from sqlmodel import select
 from uuid import UUID
 from typing import List, Optional
+from fastapi.responses import FileResponse
 
 router = APIRouter(
     prefix="/music",
@@ -23,6 +25,14 @@ async def get_album(
     music_service = MusicService(db)
     return await music_service.get_album(album_uuid)
 
+@router.get("/file/{collection_track_uuid}")
+async def stream_file(collection_track_uuid: UUID, db: AsyncSession = Depends(get_async_session)):
+    result = await db.execute(select(CollectionTrack).where(CollectionTrack.collection_track_uuid == collection_track_uuid))
+    ctrack = result.scalar_one_or_none()
+    if not ctrack:
+        raise HTTPException(404, "File not found")
+
+    return FileResponse(ctrack.path, headers={"Accept-Ranges": "bytes"})
 
 @router.get("/albums/", response_model=PaginatedResponse[AlbumRead])
 async def get_all_albums(
