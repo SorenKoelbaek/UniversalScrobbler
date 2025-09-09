@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
 from sqlmodel import select, delete
 from redis.asyncio import Redis
-
+from services.listen_service import ListenService
 from models.sqlmodels import (
     PlaybackQueue,
     PlaybackSession,
@@ -18,6 +18,8 @@ from models.sqlmodels import (
     Artist,
     Track,
     AlbumRelease,
+    PlaybackHistory,
+    User
 )
 from models.appmodels import (
     PlayRequest,
@@ -34,8 +36,59 @@ class PlaybackService:
     def __init__(self, db: AsyncSession, redis: Redis):
         self.db = db
         self.redis = redis
-
+        self.listen_service = ListenService(db)
     # --- helpers --------------------------------------------------------------
+
+    def _should_register_play(self, position_ms: int, duration_ms: int | None) -> bool:
+        """Return True if thresholds are met (≥50% or ≥240s)."""
+        if not duration_ms:
+            return False
+
+        threshold_50pct = duration_ms * 0.5
+        threshold_240s = 240_000
+        return position_ms >= min(threshold_50pct, threshold_240s)
+
+    async def _register_play_if_needed(self, user_uuid: UUID):
+        """Check current track for eligibility and log if not already recorded."""
+        session = await self._get_or_create_session(user_uuid)
+        state = await self._get_queue(user_uuid)
+        if not state.now_playing or session.current_registered:
+            return
+
+        queue_entry_id = state.now_playing.playback_queue_uuid
+        result = await self.db.execute(
+            select(PlaybackQueue)
+            .where(PlaybackQueue.playback_queue_uuid == queue_entry_id)
+            .options(
+                selectinload(PlaybackQueue.track_version)
+                .selectinload(TrackVersion.track)  # 👈 ensure track is loaded
+            )
+        )
+        pq = result.scalars().first()
+        if not pq:
+            return
+
+        track_version = pq.track_version
+        track = track_version.track
+
+        user = await self.db.get(User, user_uuid)
+
+        # ✅ Use active device from the session if available
+        await self.listen_service.add_listen(
+            user=user,
+            track_version_uuid=track_version.track_version_uuid,
+            device_uuid=session.active_device_uuid,
+            played_at=datetime.now(UTC),
+        )
+
+        session.current_registered = True
+        self.db.add(session)
+        await self.db.commit()
+
+        logger.info(
+            f"✅ Registered play track={track.name} "
+            f"user={user_uuid} device={session.active_device_uuid}"
+        )
 
     def _project_position(self, session: PlaybackSession) -> int:
         if not session or session.play_state != "playing":
@@ -43,23 +96,51 @@ class PlaybackService:
         elapsed_ms = int((datetime.now(UTC) - session.updated_at).total_seconds() * 1000)
         return session.position_ms + elapsed_ms
 
-    async def _get_or_create_session(self, user_uuid: UUID) -> PlaybackSession:
+    async def _get_or_create_session(
+        self,
+        user_uuid: UUID,
+        device_id: str | None = None,
+        device_name: str | None = None,
+    ) -> PlaybackSession:
         result = await self.db.execute(
             select(PlaybackSession).where(PlaybackSession.user_uuid == user_uuid)
         )
         session = result.scalars().first()
+
         if not session:
             session = PlaybackSession(user_uuid=user_uuid)
             self.db.add(session)
             await self.db.commit()
             await self.db.refresh(session)
             logger.debug(f"✨ Created new PlaybackSession for {user_uuid}")
-        return session
 
+        if device_id:
+            from services.device_service import DeviceService
+            device_service = DeviceService(self.db)
+            device = await device_service.get_or_create_device(
+                user_uuid=user_uuid,
+                device_id=device_id,
+                device_name=device_name or "Unknown Device",
+            )
+
+            # 🔹 Check against connected devices in Redis SSE
+            from services.redis_sse_service import redis_sse_service
+            active_devices = redis_sse_service._active_devices.get(user_uuid, {})
+
+            if not session.active_device_uuid or str(session.active_device_uuid) not in active_devices:
+                old = session.active_device_uuid
+                session.active_device_uuid = device.device_uuid
+                self.db.add(session)
+                await self.db.commit()
+                logger.info(
+                    f"🔄 Active device switched {old} → {device.device_uuid} ({device.device_name}) for {user_uuid}"
+                )
+
+        return session
     # --- controls -------------------------------------------------------------
 
-    async def resume(self, user_uuid: UUID) -> PlaybackQueueSimple:
-        session = await self._get_or_create_session(user_uuid)
+    async def resume(self, user_uuid: UUID, device: dict | None = None) -> PlaybackQueueSimple:
+        session = await self._get_or_create_session(user_uuid, device.get("device_id") if device else None, device.get("device_name") if device else None)
         session.position_ms = self._project_position(session)
         session.play_state = "playing"
         session.updated_at = datetime.now(UTC)
@@ -70,8 +151,8 @@ class PlaybackService:
         logger.info(f"▶️ Resumed playback for {user_uuid}")
         return await self._get_queue(user_uuid)
 
-    async def pause(self, user_uuid: UUID) -> PlaybackQueueSimple:
-        session = await self._get_or_create_session(user_uuid)
+    async def pause(self, user_uuid: UUID, device: dict | None = None) -> PlaybackQueueSimple:
+        session = await self._get_or_create_session(user_uuid, device.get("device_id") if device else None, device.get("device_name") if device else None)
         session.position_ms = self._project_position(session)
         session.play_state = "paused"
         session.updated_at = datetime.now(UTC)
@@ -82,8 +163,8 @@ class PlaybackService:
         logger.info(f"⏸️ Paused playback for {user_uuid}")
         return await self._get_queue(user_uuid)
 
-    async def seek(self, user_uuid: UUID, position_ms: int) -> PlaybackQueueSimple:
-        session = await self._get_or_create_session(user_uuid)
+    async def seek(self, user_uuid: UUID, position_ms: int, device: dict | None = None) -> PlaybackQueueSimple:
+        session = await self._get_or_create_session(user_uuid, device.get("device_id") if device else None, device.get("device_name") if device else None)
         session.position_ms = position_ms
         session.updated_at = datetime.now(UTC)
         self.db.add(session)
@@ -131,17 +212,19 @@ class PlaybackService:
 
     async def _publish_heartbeat(self, user_uuid: UUID):
         session = await self._get_or_create_session(user_uuid)
+
         payload = {
             "rev": 0,
             "type": "heartbeat",
             "ts": int(time.time() * 1000),
             "position_ms": self._project_position(session),
             "play_state": session.play_state,
+            "active_device_uuid": str(session.active_device_uuid) if session.active_device_uuid else None,
         }
+
         channel = f"us:user:{user_uuid}"
         await self.redis.publish(channel, json.dumps(payload))
         logger.debug(f"💓 Heartbeat for {user_uuid}: {payload}")
-
     # --- queue handling -------------------------------------------------------
 
     async def _get_queue(self, user_uuid: UUID) -> PlaybackQueueSimple:
@@ -202,13 +285,48 @@ class PlaybackService:
             previous=prev_item,
         )
 
-    async def get_state(self, user_uuid: UUID) -> PlaybackQueueSimple:
-        return await self._get_queue(user_uuid)
+    async def get_state(self, user_uuid: UUID, device: dict | None = None) -> PlaybackQueueSimple:
+        state = await self._get_queue(user_uuid)
 
-    async def play(self, user_uuid: UUID, body: PlayRequest) -> PlaybackQueueSimple:
+        result = await self.db.execute(
+            select(PlaybackSession).where(PlaybackSession.user_uuid == user_uuid)
+        )
+        session = result.scalars().first()
+
+        if session and session.active_device_uuid:
+            from services.redis_sse_service import redis_sse_service
+            active_devices = redis_sse_service._active_devices.get(user_uuid, {})
+            if str(session.active_device_uuid) not in active_devices:
+                logger.warning(
+                    f"get_state function: ⚠️ Active device {session.active_device_uuid} is not in for {active_devices}, overriding…"
+                )
+                # If we know the current device → take over
+                if device:
+                    session.active_device_uuid = await self._ensure_device(user_uuid, device)
+                else:
+                    session.active_device_uuid = None
+                self.db.add(session)
+                await self.db.commit()
+
+        return state
+
+    async def _ensure_device(self, user_uuid: UUID, device: dict) -> UUID:
+        """Make sure the device exists in DB and return its UUID."""
+        from services.device_service import DeviceService
+        device_service = DeviceService(self.db)
+        dev = await device_service.get_or_create_device(
+            user_uuid=user_uuid,
+            device_id=device["device_id"],
+            device_name=device["device_name"],
+        )
+        return dev.device_uuid
+
+    async def play(self, user_uuid: UUID, body: PlayRequest, device: dict | None = None) -> PlaybackQueueSimple:
         """Replace queue with new track/album/artist and start playing."""
-        # First clear session reference to avoid FK constraint error
-        session = await self._get_or_create_session(user_uuid)
+        # first, check if we need to add scrobble from "previous"
+        await self._register_play_if_needed(user_uuid)
+        session = await self._get_or_create_session(user_uuid, device.get("device_id") if device else None, device.get("device_name") if device else None)
+        # Then clear session reference to avoid FK constraint error
         session.current_queue_uuid = None
         self.db.add(session)
         await self.db.flush()  # make sure the FK is cleared before queue delete
@@ -228,6 +346,7 @@ class PlaybackService:
         session.position_ms = 0
         session.play_state = "playing"
         session.updated_at = datetime.now(UTC)
+        session.current_registered = False
         session.current_queue_uuid = (
             first_track.playback_queue_uuid if first_track else None
         )
@@ -245,8 +364,9 @@ class PlaybackService:
         await self._publish(user_uuid, "timeline")
         return await self._get_queue(user_uuid)
 
-    async def jump_to(self, user_uuid: UUID, playback_queue_uuid: UUID) -> PlaybackQueueSimple:
+    async def jump_to(self, user_uuid: UUID, playback_queue_uuid: UUID, device: dict | None = None) -> PlaybackQueueSimple:
         """Skip directly to a specific queue entry and resume playback."""
+        await self._register_play_if_needed(user_uuid)
         # make sure this entry exists in the queue
         stmt = (
             select(PlaybackQueue)
@@ -261,11 +381,12 @@ class PlaybackService:
             raise ValueError(f"Queue entry {playback_queue_uuid} not found")
 
         # update session anchor
-        session = await self._get_or_create_session(user_uuid)
+        session = await self._get_or_create_session(user_uuid, device.get("device_id") if device else None, device.get("device_name") if device else None)
         session.current_queue_uuid = playback_queue_uuid
         session.position_ms = 0
         session.play_state = "playing"
         session.updated_at = datetime.now(UTC)
+        session.current_registered = False
         self.db.add(session)
 
         await self.db.commit()
@@ -352,10 +473,10 @@ class PlaybackService:
         await self.db.commit()
         logger.info(f"➕ Added {len(new_items)} items to queue for {user_uuid}")
 
-    async def next(self, user_uuid: UUID) -> PlaybackQueueSimple:
+    async def next(self, user_uuid: UUID, device: dict | None = None) -> PlaybackQueueSimple:
         """Advance to the next track in the queue (using current_queue_uuid)."""
-        session = await self._get_or_create_session(user_uuid)
-
+        await self._register_play_if_needed(user_uuid)
+        session = await self._get_or_create_session(user_uuid, device.get("device_id") if device else None, device.get("device_name") if device else None)
         # fetch queue ordered
         stmt = (
             select(PlaybackQueue)
@@ -379,16 +500,18 @@ class PlaybackService:
             session.position_ms = 0
             session.play_state = "playing"
             session.updated_at = datetime.now(UTC)
+            session.current_registered = False
             self.db.add(session)
             await self.db.commit()
             await self._publish(user_uuid, "timeline")
 
         return await self._get_queue(user_uuid)
 
-    async def previous(self, user_uuid: UUID) -> PlaybackQueueSimple:
+    async def previous(self, user_uuid: UUID, device: dict | None = None) -> PlaybackQueueSimple:
         """Go back to the previous track in the queue (using current_queue_uuid)."""
-        session = await self._get_or_create_session(user_uuid)
+        await self._register_play_if_needed(user_uuid)
 
+        session = await self._get_or_create_session(user_uuid, device.get("device_id") if device else None, device.get("device_name") if device else None)
         # fetch queue ordered
         stmt = (
             select(PlaybackQueue)
@@ -412,6 +535,7 @@ class PlaybackService:
             session.position_ms = 0
             session.play_state = "playing"
             session.updated_at = datetime.now(UTC)
+            session.current_registered = False
             self.db.add(session)
             await self.db.commit()
             await self._publish(user_uuid, "timeline")

@@ -2,7 +2,7 @@ from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy import func
 from typing import Optional, List
 from datetime import datetime, UTC,  timezone
-from sqlalchemy import BigInteger, Column, String, ForeignKeyConstraint, UniqueConstraint, Column, DateTime
+from sqlalchemy import BigInteger, Column, String, ForeignKeyConstraint, UniqueConstraint, Column, DateTime, Boolean
 from typing import Annotated
 from uuid import UUID, uuid4
 from datetime import datetime, date
@@ -228,12 +228,16 @@ class PlaybackHistory(SQLModel, table=True):
     played_at: datetime = Field(
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
-    source: str = "spotify"
+    source: str = Field(
+        default="Streaming",
+        sa_column=Column(
+            String,
+            nullable=False,
+            server_default="Streaming"
+        )
+    )
     device_uuid: UUID = Field(foreign_key="device.device_uuid")
     device: Optional["Device"] = Relationship()
-    full_play: bool = False
-    is_still_playing: bool = True
-    spotify_track_id: Optional[str] = None
     user: Optional["User"] = Relationship()
     track: Optional["Track"] = Relationship()
     album: Optional["Album"] = Relationship()
@@ -512,7 +516,16 @@ class PlaybackSession(SQLModel, table=True):
     user_uuid: UUID = Field(foreign_key="appuser.user_uuid", nullable=False, unique=True)
     play_state: str = Field(default="paused")
     position_ms: int = Field(default=0)
-    active_device: str | None = None
+    active_device_uuid: UUID | None = Field(default=None, foreign_key="device.device_uuid")
+    active_device: Optional["Device"] = Relationship()
     updated_at: datetime = Field(
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+    current_registered: bool = Field(
+        default=False,
+        sa_column=Column(
+            Boolean,
+            nullable=False,
+            server_default="false"
+        )
     )

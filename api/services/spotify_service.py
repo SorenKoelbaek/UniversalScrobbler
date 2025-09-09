@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 from fastapi import HTTPException
 from models.sqlmodels import SpotifyToken, PlaybackHistory
 from config import settings
-from models.appmodels import CurrentlyPlaying
 import logging
 from typing import Optional
 import json
@@ -94,34 +93,6 @@ class SpotifyService:
 
     def should_scrobble(self, track: dict) -> bool:
         return track.get("progress_ms", 0) >= 30_000
-
-    async def get_currently_playing_state(self, user_uuid: str, db: AsyncSession) -> Optional[CurrentlyPlaying]:
-        result = await db.exec(
-            select(PlaybackHistory)
-            .where(
-                PlaybackHistory.user_uuid == user_uuid,
-                PlaybackHistory.is_still_playing == True
-            )
-            .order_by(PlaybackHistory.played_at.desc())
-        )
-        latest = result.first()
-
-        if latest:
-            return CurrentlyPlaying(
-                spotify_track_id=latest.spotify_track_id,
-                track_name=latest.track_name,
-                artist_name=latest.artist_name,
-                album_name=latest.album_name,
-                discogs_release_id=latest.discogs_release_id,
-                played_at=latest.played_at,
-                source=latest.source,
-                device_name=latest.device_name,
-                progress_ms=latest.progress_ms,
-                duration_ms=latest.duration_ms,
-                full_play=latest.full_play,
-                is_still_playing=latest.is_still_playing
-            )
-        return None
 
     async def track_already_scrobbled(self, db: AsyncSession, user_uuid: str, track_id: str, played_at: datetime) -> bool:
         result = await db.exec(

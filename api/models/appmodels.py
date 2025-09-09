@@ -16,6 +16,9 @@ T = TypeVar("T")
 # Device / Playback History
 # -------------------------------------------------------------------
 
+class DeviceSwitchRequest(BaseModel):
+    device_uuid: UUID
+
 class DeviceBase(BaseModel):
     device_uuid: UUID
     device_name: str
@@ -25,10 +28,8 @@ class DeviceBase(BaseModel):
 
 class PlaybackHistoryBase(BaseModel):
     playback_history_uuid: UUID
-    spotify_track_id: Optional[str]
     played_at: datetime
-    source: Optional[str]
-    full_play: Optional[bool] = False
+
 
     class Config:
         from_attributes = True
@@ -53,14 +54,6 @@ class PlaybackHistorySimple(PlaybackHistoryBase):
         ..., alias=AliasPath("album", "release_date")
     )
     full_update: Optional[bool] = False
-
-    class Config:
-        from_attributes = True
-
-
-class CurrentlyPlaying(PlaybackHistorySimple):
-    duration_seconds: Optional[int] = None
-    is_still_playing: bool
 
     class Config:
         from_attributes = True

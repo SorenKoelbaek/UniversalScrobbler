@@ -4,14 +4,15 @@ import json
 import logging
 from uuid import UUID
 from typing import Dict
-
+from datetime import datetime, UTC
 from sqlmodel import select
 import dependencies.redis as redis_dep
 from dependencies.database import get_async_session
 from services.playback_service import PlaybackService
 from fastapi.encoders import jsonable_encoder
 from fastapi import Request
-from models.sqlmodels import PlaybackSession
+from models.sqlmodels import PlaybackSession, Device
+import copy
 
 logger = logging.getLogger(__name__)
 
@@ -26,36 +27,76 @@ class RedisSSEService:
 
     def __init__(self):
         self._task: asyncio.Task | None = None
-        self._queues: Dict[UUID, asyncio.Queue] = {}
+        self._queues: Dict[tuple[UUID, UUID], asyncio.Queue] = {}
         self._heartbeat_task: asyncio.Task | None = None
+        self._active_devices: Dict[UUID, dict] = {}
 
-    def add_client(self, user_uuid: UUID) -> asyncio.Queue:
+    def add_client(self, user_uuid: UUID, device_uuid: UUID, device_name: str) -> asyncio.Queue:
         q = asyncio.Queue(maxsize=50)
-        self._queues[user_uuid] = q
-        logger.debug(f"➕ Added SSE client for {user_uuid}. Active: {list(self._queues.keys())}")
+        self._queues[(user_uuid, device_uuid)] = q
+
+        if user_uuid not in self._active_devices:
+            self._active_devices[user_uuid] = {}
+        self._active_devices[user_uuid][str(device_uuid)] = {
+            "name": device_name,
+            "connected": True,
+            "last_seen": datetime.now(UTC),
+        }
+
+        logger.info(f"➕ Added device {device_name} ({device_uuid}) for {user_uuid}")
         return q
 
-    def remove_client(self, user_uuid: UUID) -> None:
-        if user_uuid in self._queues:
-            del self._queues[user_uuid]
-            logger.info(f"➖ Removed SSE client for {user_uuid}. Active: {list(self._queues.keys())}")
+    def remove_client(self, user_uuid: UUID, device_uuid: UUID) -> None:
+        self._queues.pop((user_uuid, device_uuid), None)
 
-    async def stream(self, request: Request, user_uuid: str):
+        if user_uuid in self._active_devices and str(device_uuid) in self._active_devices[user_uuid]:
+            self._active_devices[user_uuid][str(device_uuid)]["connected"] = False
+            self._active_devices[user_uuid][str(device_uuid)]["last_seen"] = datetime.now(UTC)
+
+        logger.info(f"➖ Removed device {device_uuid} for {user_uuid}")
+
+    import copy
+
+    async def stream(self, request: Request, user_uuid: str, device: dict | None = None):
         uuid_obj = UUID(user_uuid)
-        queue = self.add_client(uuid_obj)
+        logger.info(f"received device {device} in redis service")
 
-        # 🔹 Send initial snapshot
+        this_device_id = device.get("device_id") if device else None
+        this_device_name = device.get("device_name") if device else None
+
         try:
             db_gen = get_async_session()
             db = await anext(db_gen)
             try:
                 service = PlaybackService(db, redis_dep.redis_client)
+                session = await service._get_or_create_session(
+                    uuid_obj,
+                    device_id=this_device_id,
+                    device_name=this_device_name,
+                )
+
+                # 🔹 Resolve canonical DB device
+                result = await db.execute(
+                    select(Device).where(Device.user_uuid == uuid_obj, Device.device_id == this_device_id)
+                )
+                db_device = result.scalars().first()
+                if not db_device:
+                    raise RuntimeError(f"Device {this_device_id} not found in DB for user {uuid_obj}")
+
+                this_device_uuid = db_device.device_uuid
+                this_device_name = db_device.device_name
+
+                queue = self.add_client(uuid_obj, this_device_uuid, this_device_name)
+
+                # Load state
                 state = await service.get_state(uuid_obj)
 
                 initial_payload = {
                     "rev": 1,
                     "type": "timeline",
                     "ts": int(asyncio.get_running_loop().time() * 1000),
+                    "this_device_uuid": str(this_device_uuid),
+                    "this_device_name": this_device_name,
                 }
 
                 if state.now_playing:
@@ -64,11 +105,13 @@ class RedisSSEService:
                         "title": state.now_playing.track.name,
                         "artist": (
                             state.now_playing.track.artists[0].name
-                            if state.now_playing.track.artists else "—"
+                            if state.now_playing.track.artists
+                            else "—"
                         ),
                         "album": (
                             state.now_playing.track.albums[0].title
-                            if state.now_playing.track.albums else "—"
+                            if state.now_playing.track.albums
+                            else "—"
                         ),
                         "duration_ms": state.now_playing.duration_ms,
                         "file_url": state.now_playing.file_url,
@@ -76,25 +119,69 @@ class RedisSSEService:
                     }
                     initial_payload["play_state"] = "paused"
 
+                # 🔹 inject active devices snapshot
+                devices = [
+                    {
+                        "device_uuid": str(dev_uuid),
+                        "device_name": meta["name"],
+                        "connected": meta["connected"],
+                    }
+                    for dev_uuid, meta in self._active_devices.get(uuid_obj, {}).items()
+                    if meta["connected"]
+                ]
+                initial_payload["devices"] = devices
+
                 yield f"{json.dumps(jsonable_encoder(initial_payload))}\n\n"
-                logger.debug(f"📡 Sent initial snapshot to {user_uuid}: {initial_payload}")
             finally:
                 await db_gen.aclose()
         except Exception as e:
             logger.error(f"❌ Failed to send initial snapshot for {user_uuid}: {e}")
+            return
 
-        # 🔹 Process queue
         try:
             while True:
                 if await request.is_disconnected():
                     break
                 try:
                     message = await asyncio.wait_for(queue.get(), timeout=5)
-                    yield f"{json.dumps(jsonable_encoder(message))}\n\n"
+
+                    if isinstance(message, dict):
+                        # 🔹 Make per-client copy
+                        msg_copy = copy.deepcopy(message)
+
+                        msg_copy["this_device_uuid"] = str(this_device_uuid)
+                        msg_copy["this_device_name"] = this_device_name
+
+                        # validate active device before sending
+                        result = await db.execute(
+                            select(PlaybackSession.active_device_uuid).where(
+                                PlaybackSession.user_uuid == uuid_obj
+                            )
+                        )
+                        active_device_uuid = result.scalar_one_or_none()
+                        if active_device_uuid and str(active_device_uuid) not in self._active_devices.get(uuid_obj, {}):
+                            logger.warning(
+                                f"⚠️ stream_function: Active device {active_device_uuid} is not in {self._active_devices.get(uuid_obj, {})}, overriding to None"
+                            )
+                            active_device_uuid = None
+                        msg_copy["active_device_uuid"] = str(active_device_uuid) if active_device_uuid else None
+
+                        devices = [
+                            {
+                                "device_uuid": str(dev_uuid),
+                                "device_name": meta["name"],
+                                "connected": meta["connected"],
+                            }
+                            for dev_uuid, meta in self._active_devices.get(uuid_obj, {}).items()
+                            if meta["connected"]
+                        ]
+                        msg_copy["devices"] = devices
+
+                        yield f"{json.dumps(jsonable_encoder(msg_copy))}\n\n"
                 except asyncio.TimeoutError:
-                    yield ":\n\n"  # SSE keepalive
+                    yield ":\n\n"
         finally:
-            self.remove_client(uuid_obj)
+            self.remove_client(uuid_obj, this_device_uuid)
 
     async def _listen(self):
         if redis_dep.redis_client is None:
@@ -120,16 +207,16 @@ class RedisSSEService:
 
                     if channel and channel.startswith("us:user:"):
                         user_uuid = UUID(channel.split(":")[-1])
-                        q = self._queues.get(user_uuid)
 
-                        if q:
+                        # fan-out to all connected device queues for this user
+                        for (u, d), q in list(self._queues.items()):
+                            if u != user_uuid:
+                                continue
                             if q.full():
                                 dropped = q.get_nowait()
-                                logger.warning(f"⚠️ Queue full for {user_uuid}, dropped: {dropped}")
+                                logger.warning(f"⚠️ Queue full for {user_uuid}/{d}, dropped: {dropped}")
                             await q.put(data)
-                            logger.info(f"➡️ Enqueued SSE for {user_uuid}: {data}")
-                        else:
-                            logger.debug(f"👀 No SSE client for {user_uuid}, skipping")
+                            logger.info(f"➡️ Enqueued SSE for {user_uuid}/{d}: {data}")
 
                 except Exception as e:
                     logger.error(f"❌ Failed to handle pubsub message: {e}")
