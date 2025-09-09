@@ -53,6 +53,8 @@ class PlaybackHistorySimple(PlaybackHistoryBase):
     release_date: Optional[datetime] = Field(
         ..., alias=AliasPath("album", "release_date")
     )
+    image_thumbnail_url: Optional[str] = Field(None, alias=AliasPath("album", "image_thumbnail_url"))
+    image_url: Optional[str] = Field(None, alias=AliasPath("album", "image_url"))
     full_update: Optional[bool] = False
 
     class Config:

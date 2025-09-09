@@ -6,8 +6,8 @@ from typing import Optional, List
 
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from models.sqlmodels import PlaybackHistory, User
+from sqlalchemy.orm import selectinload
+from models.sqlmodels import PlaybackHistory, User, TrackVersion, Album, Artist
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +50,15 @@ class ListenService:
 
     # --- queries --------------------------------------------------------------
     async def get_recent_listens(
-        self, user: User, limit: int = 50
+            self, user: User, limit: int = 50
     ) -> List[PlaybackHistory]:
-        """Return the most recent listens for a user."""
         stmt = (
             select(PlaybackHistory)
             .where(PlaybackHistory.user_uuid == user.user_uuid)
+            .options(
+                selectinload(PlaybackHistory.track),
+                selectinload(PlaybackHistory.album).selectinload(Album.artists),
+            )
             .order_by(PlaybackHistory.played_at.desc())
             .limit(limit)
         )
