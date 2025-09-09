@@ -34,16 +34,17 @@
 - [x] Routes: `/playback-sessions/play`, `/pause`, `/resume`, `/seek`, `/next`, `/previous`.
 - [x] SSE timeline updates include `now_playing`, `file_url`, `duration_ms`, `play_state`, `position_ms`.
 - [ ] Projection of `position_ms` via monotonic clock math.
-- [ ] Speaker switching (`/playback-sessions/speaker`).
+- [x] Speaker switching (`/playback-sessions/speaker`).
 - [ ] Idempotence with client event UUID.
 
 ---
 
 ## 3. Device Management
 
-- [ ] DB: devices table (`device_uuid`, `name`, `last_seen`).
-- [ ] Routes: `/devices/register`, `/devices/heartbeat`.
-- [ ] UI: choose active speaker → rotate token + update session.
+- [x] DB: devices table (`device_uuid`, `name`, `last_seen`).
+- [x] Devices now auto-registered on connect (via _get_or_create_session)
+- [x] Routes: /devices/register, /devices/heartbeat (not explicit, piggybacking on session/stream now)
+- [x] UI: choose active speaker → device list + switch endpoint integrated today
 
 ---
 
@@ -71,7 +72,7 @@
 
 - [x] Persist session state in DB.
 - [ ] On login: fetch snapshot and resume position.
-- [ ] Staleness rules: reset old snapshots.
+- [x] Staleness rules: override stale active_device_uuid with connected device (fixed today)
 
 ---
 
@@ -93,6 +94,7 @@
 - [x] Player UI:
   - Show play/pause/seek/next/prev controls bound to new endpoints.
   - Show devices and allow switching active speaker.
+- [x] Devices shown + switching active speaker
 - [ ] Collection page: infinite scroll + sort refinements.
 
 ---
