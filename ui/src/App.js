@@ -29,6 +29,7 @@ import LiveSessionCard from "./components/LiveSessionCard";
 import ListeningHistory from "./pages/ListeningHistory"; // ✅ added
 
 const navLinks = [
+  { label: "Discover", path: "/discover" },
   { label: "Collection", path: "/collection" },
   { label: "Listening History", path: "/listening-history" },
 ];
@@ -82,7 +83,12 @@ const App = () => {
 
       <Box sx={{ padding: 2 }}>
         <Routes>
-          <Route path="/" element={<Landing />} />
+          <Route
+              path="/"
+              element={
+                auth?.user ? <Navigate to="/discover" replace /> : <Login />
+              }
+            />
           <Route path="/login" element={<Login />} />
           <Route
             path="/spotify/callback"
@@ -95,6 +101,10 @@ const App = () => {
           <Route
             path="/collection"
             element={<ProtectedRoute><Collection /></ProtectedRoute>}
+          />
+          <Route
+            path="/discover"
+            element={<ProtectedRoute><Discover /></ProtectedRoute>}
           />
           <Route
             path="/album/:album_uuid"

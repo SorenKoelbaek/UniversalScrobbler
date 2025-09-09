@@ -45,7 +45,6 @@ async def scan_collection_directory(
     async def task():
         logger.debug("Starting background scan...")
         await collection_service.scan_directory(
-            collection_id=collection_id,
             user_uuid=user_id,
             overwrite=overwrite
         )

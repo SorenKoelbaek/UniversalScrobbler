@@ -11,6 +11,7 @@ import {
 import { Link } from "react-router-dom";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import QueueMusicIcon from "@mui/icons-material/QueueMusic";
+import apiClient from "../utils/apiClient";
 
 const TrackList = ({ tracks }) => {
   if (!tracks || tracks.length === 0) return null;
@@ -31,13 +32,24 @@ const TrackList = ({ tracks }) => {
     return 0;
   });
 
-  const handlePlay = (track) => {
-    console.log("▶️ Play track:", track.track_version_uuid);
-  };
+  const handlePlay = async (track_uuid) => {
+      try {
+        await apiClient.post("/playback-sessions/play", { track_uuid });
+        console.log("Play requested:", track_uuid);
+      } catch (err) {
+        console.error("Failed to start playback", err);
+      }
+    };
 
-  const handleQueue = (track) => {
-    console.log("➕ Add to queue:", track.track_version_uuid);
-  };
+    const handleQueue = async (track_uuid) => {
+      try {
+        await apiClient.post("/playback-sessions/queue", { track_uuid });
+        console.log("queue requested:", track_uuid);
+      } catch (err) {
+        console.error("Failed to add to queue", err);
+      }
+    };
+
 
   return (
     <Box>
@@ -85,7 +97,7 @@ const TrackList = ({ tracks }) => {
                       <Tooltip title="Play">
                         <IconButton
                           size="small"
-                          onClick={() => handlePlay(track)}
+                          onClick={() => handlePlay(track.track_uuid)}
                         >
                           <PlayArrowIcon fontSize="small" />
                         </IconButton>
@@ -93,7 +105,7 @@ const TrackList = ({ tracks }) => {
                       <Tooltip title="Add to Queue">
                         <IconButton
                           size="small"
-                          onClick={() => handleQueue(track)}
+                          onClick={() => handleQueue(track.track_uuid)}
                         >
                           <QueueMusicIcon fontSize="small" />
                         </IconButton>

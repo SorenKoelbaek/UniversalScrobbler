@@ -2,7 +2,9 @@ from sqlalchemy import func, or_, exists
 from sqlalchemy.orm import selectinload
 from datetime import datetime
 from models.sqlmodels import Collection, Album, CollectionAlbumReleaseBridge, Artist, AlbumRelease, \
-    AlbumReleaseArtistBridge, AlbumArtistBridge, CollectionAlbumBridge, CollectionAlbumFormat, Track, TrackArtistBridge, TrackAlbumBridge, TrackVersion, TrackVersionAlbumReleaseBridge
+    AlbumReleaseArtistBridge, AlbumArtistBridge, CollectionAlbumBridge, CollectionAlbumFormat, Track, \
+    TrackArtistBridge, TrackAlbumBridge, TrackVersion, TrackVersionAlbumReleaseBridge, DiscogsToken, \
+    Collection, LibraryTrack, FileScanCache
 from models.appmodels import CollectionSimple, CollectionSimpleRead, PaginatedResponse, AlbumFlat
 from uuid import UUID
 from fastapi import HTTPException
@@ -16,7 +18,6 @@ import asyncio
 import re
 from dependencies.musicbrainz_api import MusicBrainzAPI
 from dependencies.discogs_api import DiscogsAPI
-from models.sqlmodels import DiscogsToken, Collection, CollectionTrack, FileScanCache
 from services.musicbrainz_service import MusicBrainzService
 from services.discogs_service import DiscogsService
 from config import settings
@@ -32,14 +33,12 @@ class CollectionService:
         self.discogs_service = DiscogsService(db, discogs_api)
 
     async def get_or_create_collection(self, user_uuid: str, collection_name: str):
-        """Helper function to check if a user exists and create it if not."""
         result = await self.db.execute(select(Collection).where(Collection.user_uuid == user_uuid))
         collection = result.scalars().first()
         if not collection:
             collection = Collection(user_uuid=user_uuid, collection_name=collection_name)
             self.db.add(collection)
             await self.db.commit()
-
         return await self.get_collection_simple(collection.collection_uuid)
 
     async def get_collection(self, collection_id: UUID) -> CollectionSimpleRead:
@@ -47,18 +46,12 @@ class CollectionService:
             select(Collection)
             .where(Collection.collection_uuid == collection_id)
             .options(
+                selectinload(Collection.albums).selectinload(Album.artists),
+                selectinload(Collection.albums).selectinload(Album.tracks),
                 selectinload(Collection.albums)
-                .selectinload(Album.artists),
-                selectinload(Collection.albums)
-                .selectinload(Album.tracks),
-                selectinload(Collection.albums)
-                .selectinload(Album.collectionalbumbridge_collection)  # bridge
-                .selectinload(CollectionAlbumBridge.formats),  # 🔥 load formats
-                selectinload(Collection.album_releases)
-                .selectinload(AlbumRelease.artists),
-                selectinload(Collection.tracks)
-                .selectinload(CollectionTrack.track_version)
-                .selectinload(TrackVersion.album_releases),  # so releases are available
+                .selectinload(Album.collectionalbumbridge_collection)
+                .selectinload(CollectionAlbumBridge.formats),
+                selectinload(Collection.album_releases).selectinload(AlbumRelease.artists),
             )
         )
         collection = result.scalar_one_or_none()
@@ -67,13 +60,12 @@ class CollectionService:
         return CollectionSimpleRead.model_validate(collection)
 
     async def get_primary_collection(
-            self,
-            user_uuid: UUID,
-            offset: int = 0,
-            limit: int = 100,
-            search: str | None = None,
+        self,
+        user_uuid: UUID,
+        offset: int = 0,
+        limit: int = 100,
+        search: str | None = None,
     ) -> PaginatedResponse[AlbumFlat]:
-        # Fetch the user's collection
         result = await self.db.execute(
             select(Collection).where(Collection.user_uuid == user_uuid)
         )
@@ -84,8 +76,10 @@ class CollectionService:
         base_query = (
             select(Album)
             .join(AlbumRelease, Album.album_uuid == AlbumRelease.album_uuid)
-            .join(CollectionAlbumReleaseBridge,
-                  CollectionAlbumReleaseBridge.album_release_uuid == AlbumRelease.album_release_uuid)
+            .join(
+                CollectionAlbumReleaseBridge,
+                CollectionAlbumReleaseBridge.album_release_uuid == AlbumRelease.album_release_uuid,
+            )
             .where(CollectionAlbumReleaseBridge.collection_uuid == collection.collection_uuid)
         )
 
@@ -99,22 +93,16 @@ class CollectionService:
                 .where(AlbumArtistBridge.album_uuid == Album.album_uuid)
                 .where(func.lower(Artist.name).ilike(search_term))
             )
-
             title_match = func.lower(Album.title).ilike(search_term)
 
             base_query = base_query.where(or_(title_match, artist_match))
 
-        # Total count
-        total_query = base_query.with_only_columns(
-            func.count(func.distinct(Album.album_uuid))
-        )
+        total_query = base_query.with_only_columns(func.count(func.distinct(Album.album_uuid)))
         total_result = await self.db.execute(total_query)
         total = total_result.scalar_one()
 
-        # Apply pagination and eager loading
         albums_query = (
-            base_query
-            .distinct(Album.album_uuid)
+            base_query.distinct(Album.album_uuid)
             .offset(offset)
             .limit(limit)
             .options(
@@ -123,7 +111,6 @@ class CollectionService:
                 selectinload(Album.collectionalbumbridge).selectinload(CollectionAlbumBridge.formats),
             )
         )
-
         albums_result = await self.db.execute(albums_query)
         albums = albums_result.scalars().all()
 
@@ -139,11 +126,8 @@ class CollectionService:
             select(Collection)
             .where(Collection.collection_uuid == collection_id)
             .options(
-                selectinload(Collection.albums)
-                .selectinload(Album.types),
+                selectinload(Collection.albums).selectinload(Album.types),
                 selectinload(Collection.album_releases),
-                selectinload(Collection.tracks)
-                .selectinload(CollectionTrack.track_version),
             )
         )
         collection = result.scalar_one_or_none()
@@ -154,63 +138,57 @@ class CollectionService:
     async def read_collection_from_csv(self, csv_file_path):
         collection = []
         try:
-            with open(csv_file_path, 'r', encoding='utf-8') as csvfile:
+            with open(csv_file_path, "r", encoding="utf-8") as csvfile:
                 reader = csv.DictReader(csvfile)
                 for row in reader:
-                    if 'release_id' in row and row['release_id']:
+                    if "release_id" in row and row["release_id"]:
                         try:
-                            release_id = int(row['release_id'])
-                            collection.append({
-                                'discogs_release_id': release_id,
-                                'artist': row.get('Artist', ''),
-                                'title': row.get('Title', ''),
-                                'label': row.get('Label', ''),
-                                'format': row.get('Format', ''),
-                                'catalog': row.get('Catalog#', ''),
-                                'released': row.get('Released', '')
-                            })
+                            release_id = int(row["release_id"])
+                            collection.append(
+                                {
+                                    "discogs_release_id": release_id,
+                                    "artist": row.get("Artist", ""),
+                                    "title": row.get("Title", ""),
+                                    "label": row.get("Label", ""),
+                                    "format": row.get("Format", ""),
+                                    "catalog": row.get("Catalog#"),
+                                    "released": row.get("Released", ""),
+                                }
+                            )
                         except ValueError:
-                            print(f"Warning: Invalid release_id: {row['release_id']}")
+                            logger.warning(f"Invalid release_id: {row['release_id']}")
                     else:
-                        print("Warning: Row missing release_id")
+                        logger.warning("Row missing release_id")
         except Exception as e:
-            print(f"Error reading CSV file: {e}")
+            logger.error(f"Error reading CSV file: {e}")
             return None
 
-        print(f"Loaded {len(collection)} releases from CSV file")
+        logger.info(f"Loaded {len(collection)} releases from CSV file")
         return collection
 
     async def _link_release_to_collection(
-            self,
-            collection_id: UUID,
-            album: Album,
-            album_release: AlbumRelease,
-            fmt: str = "digital",
-            status: str = "owned",
+        self,
+        collection_id: UUID,
+        album: Album,
+        album_release: AlbumRelease,
+        fmt: str = "digital",
+        status: str = "owned",
     ):
-        album_uuid = album.album_uuid
-        album_release_uuid = album_release.album_release_uuid
-
-        # Album bridge
         stmt = insert(CollectionAlbumBridge).values(
-            album_uuid=album_uuid,
-            collection_uuid=collection_id
+            album_uuid=album.album_uuid, collection_uuid=collection_id
         ).on_conflict_do_nothing()
         await self.db.execute(stmt)
 
-        # Release bridge
         stmt = insert(CollectionAlbumReleaseBridge).values(
-            album_release_uuid=album_release_uuid,
-            collection_uuid=collection_id
+            album_release_uuid=album_release.album_release_uuid, collection_uuid=collection_id
         ).on_conflict_do_nothing()
         await self.db.execute(stmt)
 
-        # Format
         stmt = insert(CollectionAlbumFormat).values(
             collection_uuid=collection_id,
-            album_uuid=album_uuid,
+            album_uuid=album.album_uuid,
             format=fmt,
-            status=status
+            status=status,
         ).on_conflict_do_nothing()
         await self.db.execute(stmt)
 
@@ -426,45 +404,26 @@ class CollectionService:
 
     async def _resolve_album_via_mb(self, artist: str, album: str):
         # Use MB search API to find release
-        release_id = await self.musicbrainz_service.api.get_first_release_id_by_artist_and_album(artist, album)
-        return release_id
+        return await self.musicbrainz_service.api.get_first_release_id_by_artist_and_album(artist, album)
+
 
     def _get_file_format_and_quality(self, meta, ext: str) -> tuple[str | None, str | None]:
         fmt, quality = None, None
-
         if ext == ".flac":
             fmt = "FLAC"
-            # FLAC is lossless, but we can add resolution
             bits = getattr(meta.info, "bits_per_sample", None)
             rate = getattr(meta.info, "sample_rate", None)
-            if bits and rate:
-                quality = f"{bits}-bit / {rate // 1000}kHz"
-            else:
-                quality = "Lossless"
-
+            quality = f"{bits}-bit / {rate // 1000}kHz" if bits and rate else "Lossless"
         elif ext == ".mp3":
-            fmt = "MP3"
-            br = getattr(meta.info, "bitrate", None)
-            if br:
-                quality = f"{br // 1000} kbps"
-
+            fmt, quality = "MP3", f"{meta.info.bitrate // 1000} kbps" if getattr(meta.info, "bitrate", None) else None
         elif ext == ".ogg":
-            fmt = "OGG"
-            br = getattr(meta.info, "bitrate", None)
-            if br:
-                quality = f"{br // 1000} kbps"
-
+            fmt, quality = "OGG", f"{meta.info.bitrate // 1000} kbps" if getattr(meta.info, "bitrate", None) else None
         elif ext == ".m4a":
-            fmt = "M4A"
-            br = getattr(meta.info, "bitrate", None)
-            if br:
-                quality = f"{br // 1000} kbps"
-
+            fmt, quality = "M4A", f"{meta.info.bitrate // 1000} kbps" if getattr(meta.info, "bitrate", None) else None
         return fmt, quality
 
     async def scan_directory(
             self,
-            collection_id: UUID | None,
             user_uuid: UUID,
             music_dir: str = settings.MUSIC_DIR,
             include_extensions: tuple[str] = (".flac", ".mp3", ".ogg", ".m4a"),
@@ -473,7 +432,7 @@ class CollectionService:
     ):
         """
         Walk through a directory, extract tags, resolve with MusicBrainz,
-        and persist CollectionTrack rows.
+        and persist LibraryTrack rows (digital library).
         Falls back to placeholder entities (quality="poor") if MBID is missing.
         Uses FileScanCache to skip unchanged files between runs.
         """
@@ -483,29 +442,17 @@ class CollectionService:
                 return None
             return re.sub(r"\s+", " ", s.strip().lower())
 
-        # Ensure collection exists
-        if not collection_id:
-            collection = await self.get_or_create_collection(user_uuid, "Local Music Collection")
-            collection_id = collection.collection_uuid
-
+        # Reset cache if overwrite
         if overwrite:
-            await self.db.execute(delete(CollectionTrack).where(CollectionTrack.collection_uuid == collection_id))
-            await self.db.execute(delete(CollectionAlbumReleaseBridge).where(
-                CollectionAlbumReleaseBridge.collection_uuid == collection_id))
-            await self.db.execute(
-                delete(CollectionAlbumBridge).where(CollectionAlbumBridge.collection_uuid == collection_id))
-            await self.db.execute(
-                delete(CollectionAlbumFormat).where(CollectionAlbumFormat.collection_uuid == collection_id))
-            await self.db.execute(delete(FileScanCache))  # 🔥 clear scan cache too
+            await self.db.execute(delete(FileScanCache))
             await self.db.commit()
-            logger.info(f"Overwriting existing collection {collection_id} – flushed tracks/releases/albums/cache.")
+            logger.info("Overwrite enabled – flushed file_scan_cache.")
 
         attempts = 0
         successes = 0
-        release_cache: dict[tuple[str, str], str] = {}  # (artist, album) -> release_id
-        placeholder_cache: dict[tuple[str, str], tuple[Album, AlbumRelease]] = {}  # for poor-quality fallbacks
-
-        seen_paths: set[str] = set()  # track touched files this run
+        release_cache: dict[tuple[str, str], str] = {}
+        placeholder_cache: dict[tuple[str, str], tuple[Album, AlbumRelease]] = {}
+        seen_paths: set[str] = set()
 
         for root, _, files in os.walk(music_dir):
             dir_successes = 0
@@ -538,11 +485,8 @@ class CollectionService:
                     cached = result.scalar_one_or_none()
 
                     if cached and cached.size == size and cached.mtime == mtime:
-                        # unchanged → skip metadata, but still ensure CollectionTrack.duration_ms
                         seen_paths.add(path)
-                        # fallthrough to update duration if needed
                     else:
-                        # update or create cache entry
                         if cached:
                             cached.size = size
                             cached.mtime = mtime
@@ -609,7 +553,8 @@ class CollectionService:
 
                             artist_obj = await self.musicbrainz_service.get_or_create_artist_by_name(artist)
                             self.db.add(
-                                AlbumArtistBridge(album_uuid=album_obj.album_uuid, artist_uuid=artist_obj.artist_uuid))
+                                AlbumArtistBridge(album_uuid=album_obj.album_uuid, artist_uuid=artist_obj.artist_uuid)
+                            )
 
                             album_release = AlbumRelease(
                                 album_uuid=album_obj.album_uuid,
@@ -640,55 +585,31 @@ class CollectionService:
                             album_release_uuid=album_release.album_release_uuid,
                         ))
 
-                    # --- CollectionTrack handling ---
+                    # --- LibraryTrack handling ---
                     result = await self.db.execute(
-                        select(CollectionTrack).where(
-                            CollectionTrack.collection_uuid == collection_id,
-                            CollectionTrack.track_version_uuid == track_version.track_version_uuid,
+                        select(LibraryTrack).where(
+                            LibraryTrack.track_version_uuid == track_version.track_version_uuid,
                         )
                     )
                     existing = result.scalar_one_or_none()
 
                     if existing:
-                        # ✅ Always ensure duration_ms is filled
                         if duration_ms and (not existing.duration_ms or existing.duration_ms != duration_ms):
                             existing.duration_ms = duration_ms
                             self.db.add(existing)
                             await self.db.flush()
                         continue
 
-                    # insert new CollectionTrack
+                    # insert new LibraryTrack
                     ext = os.path.splitext(fname)[1].lower()
                     fmt, quality = self._get_file_format_and_quality(meta, ext)
-                    ct = CollectionTrack(
-                        collection_uuid=collection_id,
+                    lt = LibraryTrack(
                         track_version_uuid=track_version.track_version_uuid,
                         path=path,
-                        format=fmt,
                         quality=quality,
-                        duration_ms=duration_ms,  # ✅ always per-file
+                        duration_ms=duration_ms,
                     )
-                    self.db.add(ct)
-
-                    stmt = insert(CollectionAlbumBridge).values(
-                        album_uuid=album_obj.album_uuid,
-                        collection_uuid=collection_id
-                    ).on_conflict_do_nothing()
-                    await self.db.execute(stmt)
-
-                    stmt = insert(CollectionAlbumReleaseBridge).values(
-                        album_release_uuid=album_release.album_release_uuid,
-                        collection_uuid=collection_id
-                    ).on_conflict_do_nothing()
-                    await self.db.execute(stmt)
-
-                    stmt = insert(CollectionAlbumFormat).values(
-                        collection_uuid=collection_id,
-                        album_uuid=album_obj.album_uuid,
-                        format="digital",
-                        status="owned"
-                    ).on_conflict_do_nothing()
-                    await self.db.execute(stmt)
+                    self.db.add(lt)
 
                     await self.db.commit()
                     dir_successes += 1
@@ -716,6 +637,3 @@ class CollectionService:
             f"Scan finished: {attempts} files processed "
             f"({successes} successes, {attempts - successes} failures/skips)."
         )
-
-
-

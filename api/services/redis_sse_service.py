@@ -3,13 +3,15 @@ import asyncio
 import json
 import logging
 from uuid import UUID
-from typing import Dict, AsyncIterator
+from typing import Dict
 
-import dependencies.redis as redis_dep  # 👈 import the module, not the variable
+from sqlmodel import select
+import dependencies.redis as redis_dep
 from dependencies.database import get_async_session
 from services.playback_service import PlaybackService
 from fastapi.encoders import jsonable_encoder
 from fastapi import Request
+from models.sqlmodels import PlaybackSession
 
 logger = logging.getLogger(__name__)
 
@@ -25,16 +27,15 @@ class RedisSSEService:
     def __init__(self):
         self._task: asyncio.Task | None = None
         self._queues: Dict[UUID, asyncio.Queue] = {}
+        self._heartbeat_task: asyncio.Task | None = None
 
     def add_client(self, user_uuid: UUID) -> asyncio.Queue:
-        """Register a new SSE client and return its queue."""
         q = asyncio.Queue(maxsize=50)
         self._queues[user_uuid] = q
         logger.debug(f"➕ Added SSE client for {user_uuid}. Active: {list(self._queues.keys())}")
         return q
 
     def remove_client(self, user_uuid: UUID) -> None:
-        """Remove an SSE client queue when the user disconnects."""
         if user_uuid in self._queues:
             del self._queues[user_uuid]
             logger.info(f"➖ Removed SSE client for {user_uuid}. Active: {list(self._queues.keys())}")
@@ -43,7 +44,7 @@ class RedisSSEService:
         uuid_obj = UUID(user_uuid)
         queue = self.add_client(uuid_obj)
 
-        # 🔹 Send initial snapshot (compact form)
+        # 🔹 Send initial snapshot
         try:
             db_gen = get_async_session()
             db = await anext(db_gen)
@@ -58,7 +59,7 @@ class RedisSSEService:
                 }
 
                 if state.now_playing:
-                    now_playing = {
+                    initial_payload["now_playing"] = {
                         "track_uuid": str(state.now_playing.track.track_uuid),
                         "title": state.now_playing.track.name,
                         "artist": (
@@ -73,7 +74,6 @@ class RedisSSEService:
                         "file_url": state.now_playing.file_url,
                         "position_ms": 0,
                     }
-                    initial_payload["now_playing"] = now_playing
                     initial_payload["play_state"] = "paused"
 
                 yield f"{json.dumps(jsonable_encoder(initial_payload))}\n\n"
@@ -92,12 +92,11 @@ class RedisSSEService:
                     message = await asyncio.wait_for(queue.get(), timeout=5)
                     yield f"{json.dumps(jsonable_encoder(message))}\n\n"
                 except asyncio.TimeoutError:
-                    yield ":\n\n"  # keepalive
+                    yield ":\n\n"  # SSE keepalive
         finally:
             self.remove_client(uuid_obj)
 
     async def _listen(self):
-        """Background Redis pubsub listener that dispatches messages to queues."""
         if redis_dep.redis_client is None:
             return
 
@@ -113,7 +112,6 @@ class RedisSSEService:
             async for message in pubsub.listen():
                 if message["type"] not in ("message", "pmessage"):
                     continue
-
                 try:
                     data = json.loads(message["data"])
                     channel = message.get("channel")
@@ -145,17 +143,44 @@ class RedisSSEService:
             raise
 
     def start(self):
-        """Start background Redis listener task (idempotent)."""
         if self._task is None or self._task.done():
             logger.info("▶️ Starting Redis SSE subscriber task…")
             self._task = asyncio.create_task(self._listen())
+        if self._heartbeat_task is None or self._heartbeat_task.done():
+            logger.info("💓 Starting heartbeat loop…")
+            self._heartbeat_task = asyncio.create_task(heartbeat_loop())
 
     def stop(self):
-        """Stop background Redis listener task."""
         if self._task:
             logger.info("⏹️ Stopping Redis SSE subscriber task…")
             self._task.cancel()
             self._task = None
+        if self._heartbeat_task:
+            logger.info("⏹️ Stopping heartbeat loop…")
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+
+
+async def heartbeat_loop():
+    """Periodically publish playback heartbeats for all active sessions."""
+
+
+    while True:
+        try:
+            db_gen = get_async_session()
+            db = await anext(db_gen)
+            try:
+                result = await db.execute(select(PlaybackSession.user_uuid))
+                user_ids = [row[0] for row in result.all()]
+                for user_uuid in user_ids:
+                    service = PlaybackService(db, redis_dep.redis_client)
+                    await service._publish_heartbeat(user_uuid)
+            finally:
+                await db_gen.aclose()
+        except Exception as e:
+            logger.error(f"💥 Heartbeat loop failed: {e}")
+
+        await asyncio.sleep(5)  # every 5s
 
 
 # Singleton instance

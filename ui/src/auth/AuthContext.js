@@ -1,5 +1,5 @@
 import React, { createContext, useState, useEffect } from "react";
-import {jwtDecode} from "jwt-decode";
+import { jwtDecode } from "jwt-decode";
 import apiClient from "../utils/apiClient";
 
 const AuthContext = createContext();
@@ -7,15 +7,15 @@ const AuthContext = createContext();
 export const AuthProvider = ({ children }) => {
   const [auth, setAuth] = useState(() => {
     const token = localStorage.getItem("access_token");
-    if (token) {
+    const expiry = parseInt(localStorage.getItem("access_token_expiry"), 10);
+
+    if (token && expiry && expiry > Date.now()) {
       try {
         const decoded = jwtDecode(token);
-        if (decoded.exp * 1000 > Date.now()) {
-          return { token, user: decoded.sub };
-        }
+        return { token, user: decoded.sub };
       } catch {
-        // Invalid token
         localStorage.removeItem("access_token");
+        localStorage.removeItem("access_token_expiry");
       }
     }
     return null;
@@ -38,7 +38,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-    const login = async (username, password) => {
+  const login = async (username, password) => {
     try {
       const params = new URLSearchParams();
       params.append("username", username);
@@ -48,11 +48,13 @@ export const AuthProvider = ({ children }) => {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
       });
 
-      const { access_token } = response.data;
+      const { access_token, refresh_token, expires_at } = response.data;
       const decoded = jwtDecode(access_token);
 
       setAuth({ token: access_token, user: decoded.sub });
       localStorage.setItem("access_token", access_token);
+      localStorage.setItem("refresh_token", refresh_token);
+      localStorage.setItem("access_token_expiry", new Date(expires_at).getTime());
 
       await fetchUser();
     } catch (err) {
@@ -61,34 +63,87 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const refreshAccessToken = async () => {
+    const refreshToken = localStorage.getItem("refresh_token");
+    if (!refreshToken) {
+      logout();
+      return;
+    }
 
-  const logout = () => {
+    try {
+      const params = new URLSearchParams();
+      params.append("grant_type", "refresh_token");
+      params.append("refresh_token", refreshToken);
+
+      const response = await apiClient.post("/refresh-token", params, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      });
+
+      const { access_token, refresh_token: newRefresh, expires_at } = response.data;
+      const decoded = jwtDecode(access_token);
+
+      setAuth({ token: access_token, user: decoded.sub });
+      localStorage.setItem("access_token", access_token);
+      localStorage.setItem("refresh_token", newRefresh);
+      localStorage.setItem("access_token_expiry", new Date(expires_at).getTime());
+
+      console.info("🔄 Access token refreshed");
+    } catch (err) {
+      console.error("Failed to refresh access token:", err);
+      logout();
+    }
+  };
+
+  const logout = async () => {
+  try {
+    const refreshToken = localStorage.getItem("refresh_token");
+    if (refreshToken) {
+      const params = new URLSearchParams();
+      params.append("grant_type", "refresh_token");
+      params.append("refresh_token", refreshToken);
+
+      await apiClient.post("/revoke-token", params, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      });
+      console.info("🔒 Refresh token revoked");
+    }
+  } catch (err) {
+    console.warn("Failed to revoke refresh token", err);
+  } finally {
     setAuth(null);
     setUser(null);
     localStorage.removeItem("access_token");
-  };
+    localStorage.removeItem("refresh_token");
+    localStorage.removeItem("access_token_expiry");
+  }
+};
 
   const isTokenExpired = () => {
     if (auth?.token) {
-      const decoded = jwtDecode(auth.token);
-      return decoded.exp * 1000 <= Date.now();
+      try {
+        const decoded = jwtDecode(auth.token);
+        return decoded.exp * 1000 <= Date.now();
+      } catch {
+        return true;
+      }
     }
     return true;
   };
 
+  // Initial check
   useEffect(() => {
     if (auth && !isTokenExpired()) {
       fetchUser();
     } else if (auth) {
-      logout(); // Logout if the token is expired
+      refreshAccessToken(); // try to refresh instead of logging out immediately
     } else {
-      setLoading(false); // No token, stop loading
+      setLoading(false);
     }
   }, [auth]);
 
   return (
     <AuthContext.Provider value={{ auth, user, loading, login, logout, setUser }}>
-      {!loading && children} {/* Render children only after loading is complete */}
+      {!loading && children}
     </AuthContext.Provider>
   );
 };

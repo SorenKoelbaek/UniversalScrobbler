@@ -1,110 +1,180 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import {
   Container,
-  TextField,
   Typography,
+  TextField,
+  Box,
+  ToggleButton,
+  ToggleButtonGroup,
   Grid,
   CircularProgress,
-  Box,
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TableSortLabel,
 } from "@mui/material";
-import { useSearchParams } from "react-router-dom";
-import AlbumGridCard from "../components/AlbumGridCard";
-import AlbumListTable from "../components/AlbumListTable";
-import ArtistCard from "../components/ArtistCard";
 import apiClient from "../utils/apiClient";
-import ArtistListTable from "../components/ArtistListTable";
+import AlbumCard from "../components/AlbumCard";
+import AlbumGridCard from "../components/AlbumGridCard";
 
 const Discover = () => {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const querySearch = searchParams.get("search") || "";
-
-  const [search, setSearch] = useState(querySearch);
-  const [debouncedSearch, setDebouncedSearch] = useState(querySearch);
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [loading, setLoading] = useState(false);
-  const [albums, setAlbums] = useState([]);
-  const [artists, setArtists] = useState([]);
+  const [results, setResults] = useState({ albums: [], artists: [], tracks: [] });
+  const [sortKey, setSortKey] = useState("title");
+  const [sortDir, setSortDir] = useState("asc");
+  const [viewMode, setViewMode] = useState("table");
 
-  const fetchResults = useCallback(async () => {
-    if (debouncedSearch.length < 3) {
-      setAlbums([]);
-      setArtists([]);
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const [albumsRes, artistsRes] = await Promise.all([
-        apiClient.get("/music/albums", {
-          params: { search: debouncedSearch, limit: 25 },
-        }),
-        apiClient.get("/music/artists", {
-          params: { search: debouncedSearch, limit: 25 },
-        }),
-      ]);
-
-      setAlbums(albumsRes.data.items || []);
-      setArtists(artistsRes.data.items || []);
-    } catch (err) {
-      console.error("Discover search failed:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [debouncedSearch]);
-
+  // debounce input
   useEffect(() => {
     const timeout = setTimeout(() => {
-      if (search.length === 0) {
-        setSearchParams({});
-        setDebouncedSearch("");
-        setAlbums([]);
-        setArtists([]);
-      } else if (search.length >= 3) {
-        setSearchParams({ search });
+      if (search.length >= 2) {
         setDebouncedSearch(search);
+      } else {
+        setDebouncedSearch("");
+        setResults({ albums: [], artists: [], tracks: [] });
       }
     }, 300);
-
     return () => clearTimeout(timeout);
-  }, [search, setSearchParams]);
+  }, [search]);
 
+  // fetch search results
   useEffect(() => {
+    if (!debouncedSearch) return;
+    const fetchResults = async () => {
+      setLoading(true);
+      try {
+        const res = await apiClient.get("/music/search/", {
+          params: { query: debouncedSearch, only_digital: true },
+        });
+        setResults(res.data);
+      } catch (err) {
+        console.error("Search failed:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
     fetchResults();
-  }, [debouncedSearch, fetchResults]);
+  }, [debouncedSearch]);
+
+  // unify albums from albums + artist.albums + track.albums
+  const albums = useMemo(() => {
+    const seen = new Set();
+    const merged = [];
+
+    const pushAlbum = (a) => {
+      if (a && !seen.has(a.album_uuid)) {
+        seen.add(a.album_uuid);
+        merged.push(a);
+      }
+    };
+
+    results.albums.forEach(pushAlbum);
+    results.artists.forEach((artist) => artist.albums?.forEach(pushAlbum));
+    results.tracks.forEach((track) => track.albums?.forEach(pushAlbum));
+
+    // sorting
+    return merged.sort((a, b) => {
+      const valA = a[sortKey];
+      const valB = b[sortKey];
+      if (!valA) return 1;
+      if (!valB) return -1;
+      return sortDir === "asc"
+        ? String(valA).localeCompare(String(valB))
+        : String(valB).localeCompare(String(valA));
+    });
+  }, [results, sortKey, sortDir]);
+
+  const handleSort = (key) => {
+    if (sortKey === key) {
+      setSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  };
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4 }}>
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+        <Typography variant="h5">Discover</Typography>
+        <ToggleButtonGroup
+          value={viewMode}
+          exclusive
+          onChange={(e, val) => val && setViewMode(val)}
+          size="small"
+        >
+          <ToggleButton value="table">List</ToggleButton>
+          <ToggleButton value="grid">Grid</ToggleButton>
+        </ToggleButtonGroup>
+      </Box>
+
       <TextField
         fullWidth
-        placeholder="Search albums or artists..."
+        placeholder="Search albums, artists, or tracks..."
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        sx={{ mb: 4 }}
+        sx={{ mb: 2 }}
       />
 
       {loading ? (
         <Box display="flex" justifyContent="center" mt={4}>
           <CircularProgress />
         </Box>
+      ) : albums.length === 0 ? (
+        <Typography variant="body1" align="center" mt={4}>
+          {debouncedSearch ? "No results found." : "Start typing to discover music."}
+        </Typography>
+      ) : viewMode === "table" ? (
+        <Paper>
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Cover</TableCell>
+                  <TableCell></TableCell>
+                  <TableCell sortDirection={sortKey === "title" ? sortDir : false}>
+                    <TableSortLabel
+                      active={sortKey === "title"}
+                      direction={sortDir}
+                      onClick={() => handleSort("title")}
+                    >
+                      Title
+                    </TableSortLabel>
+                  </TableCell>
+                  <TableCell>Artist(s)</TableCell>
+                  <TableCell sortDirection={sortKey === "release_date" ? sortDir : false}>
+                    <TableSortLabel
+                      active={sortKey === "release_date"}
+                      direction={sortDir}
+                      onClick={() => handleSort("release_date")}
+                    >
+                      Release Date
+                    </TableSortLabel>
+                  </TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {albums.map((album) => (
+                  <AlbumCard key={album.album_uuid} albumRelease={album} />
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Paper>
       ) : (
-        <>
-          {albums.length > 0 && (
-            <>
-              <Typography variant="h6" gutterBottom>
-                Albums
-              </Typography>
-              <AlbumListTable albums={albums} showArtist={true} />
-            </>
-          )}
-
-          {artists.length > 0 && (
-            <>
-              <Typography variant="h6" gutterBottom>
-                Artists
-              </Typography>
-              <ArtistListTable artists={artists} />
-            </>
-          )}
-        </>
+        <Grid container spacing={2}>
+          {albums.map((album) => (
+            <Grid item key={album.album_uuid}>
+              <AlbumGridCard albumRelease={album} />
+            </Grid>
+          ))}
+        </Grid>
       )}
     </Container>
   );

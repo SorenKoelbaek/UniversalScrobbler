@@ -12,67 +12,31 @@
 
 ---
 
-### Prompt instructions for consistency and completeness
+## 1. Redis for Multi-Worker SSE
 
-- Routes are managed using files in `api/routers/`.
-- Redis plan includes pub/sub. **Channel per user:** `us:user:{user_uuid}`. **Message shape (tiny):** `{ "rev": <int>, "type": "timeline|speaker|queue|like|options", "ts": <ms> }`. Keep payloads small; clients fetch full state via `GET /sessions/{user_id}` if needed.
-- **Publish flow:** Apply state change in DB/memory and bump `rev`. Publish on `us:user:{uuid}` with the new `rev` (coalesce multiple changes in one request → single publish). SSE workers that have clients for that user receive and forward.
-- Database is configured using **SQLAlchemy** and **Alembic** for migration, and **async sessions**. Example model is from `models/sqlmodels.py`:
-
-```python
-class Collection(SQLModel, table=True):
-    __tablename__ = "collection"
-    collection_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
-    collection_name: str
-    user_uuid: UUID = Field(foreign_key="appuser.user_uuid")
-    user: Optional["User"] = Relationship(back_populates="collections")
-    albums: List["Album"] = Relationship(link_model=CollectionAlbumBridge)
-    album_releases: List["AlbumRelease"] = Relationship(
-        link_model=CollectionAlbumReleaseBridge
-    )
-    tracks: List["CollectionTrack"] = Relationship(back_populates="collection")
-    created_at: datetime = Field(
-        default_factory=now_utc_naive,
-        sa_column_kwargs={"server_default": func.now()}
-    )
-```
-
-- Application is deployed to Ubuntu server automatically on merge to main, run with `uvicorn.service`. Database is **Postgres**.
-- FLACs live in **`/mnt/Music`**.
-- For collaboration:
-  - Replies must be **short, consistent, easy to understand**.
-  - **Never assume**; prefer extra steps over ambiguity.
-  - For code, provide **one step at a time** to allow course correction.
-
----
-
-## 1. Add Redis for Multi-Worker SSE
-
-- [x] Provision Redis (with persistence + backoff reconnect).
-- [x] Integrate Redis client (async) with one subscriber per worker.
-- [x] Message schema → tiny payloads `{ rev, type, ts }`.
-- [ ] Publish on commit → we now publish inline after DB ops (improve later).
-- [x] Subscriber fan-out with per-user queues, latest-wins policy.
+- [x] Provision Redis + async client.
+- [x] Pub/sub channel per user with tiny payload schema `{ rev, type, ts }`.
+- [x] Subscriber fan-out with per-user queues, latest-wins.
 - [x] SSE endpoint with snapshot on connect + heartbeats.
 - [ ] Edge / proxy tuning (`proxy_buffering off`, timeouts).
-- [ ] Gunicorn multi-worker validation.
+- [ ] Validate Gunicorn multi-worker behavior.
 
 ---
 
 ## 2. Authoritative Session State & Control Model
 
 - [x] DB table `playback_session` with `play_state`, `position_ms`, `active_device`, `updated_at`.
-- [ ] Projection of `position_ms` via monotonic clock math.
 - [x] Routes: `/playback-sessions/play`, `/pause`, `/resume`, `/seek`, `/next`, `/previous`.
-- [ ] Speaker switching (`/playback-sessions/speaker`) not yet wired.
-- [x] Events over SSE: timeline updates with `now_playing`, `file_url`, `duration_ms`, `play_state`, `position_ms`.
-- [ ] Idempotence with client event UUID (future).
+- [x] SSE timeline updates include `now_playing`, `file_url`, `duration_ms`, `play_state`, `position_ms`.
+- [ ] Projection of `position_ms` via monotonic clock math.
+- [ ] Speaker switching (`/playback-sessions/speaker`).
+- [ ] Idempotence with client event UUID.
 
 ---
 
 ## 3. Device Management
 
-- [ ] DB: devices table for `device_uuid`, `name`, `last_seen`.
+- [ ] DB: devices table (`device_uuid`, `name`, `last_seen`).
 - [ ] Routes: `/devices/register`, `/devices/heartbeat`.
 - [ ] UI: choose active speaker → rotate token + update session.
 
@@ -80,7 +44,7 @@ class Collection(SQLModel, table=True):
 
 ## 4. Seekable FLAC File Proxy (Range)
 
-- [x] Endpoint `/music/file/{collection_track_uuid}` returns `FileResponse` with `Accept-Ranges: bytes`.
+- [x] `/music/file/{library_track_uuid}` returns `FileResponse` with `Accept-Ranges: bytes`.
 - [ ] Full Range handling (`206 Partial Content`, `416`).
 - [ ] Token model (bind to `{user, session, device, track}` with TTL).
 - [ ] Perf: Nginx `auth_request` + `sendfile`.
@@ -89,25 +53,47 @@ class Collection(SQLModel, table=True):
 
 ## 5. Queue Management & Player Controls
 
-- [x] DB: playback_queue already in place.
-- [ ] Fix auto-advance: next clears queue but playback doesn’t sync → must reconcile.
-- [x] Play/Pause/Resume working.
+- [x] Queue + playback working end-to-end.
+- [x] Play/Pause/Resume wired.
 - [x] Seek wired client ↔ server.
-- [ ] Like events, shuffle, repeat_mode missing.
-- [ ] Better enqueue API (`/queue/enqueue` list of tracks/albums).
+- [ ] Auto-advance: sync playback + clear queue.
+- [ ] Like events, shuffle, repeat modes.
+- [ ] Bulk enqueue API (`/queue/enqueue` list of tracks/albums).
 
 ---
 
 ## 6. Persistence & Resume
 
-- [x] Persist session state (`play_state`, `position_ms`, `active_device`, etc.).
-- [ ] On login: fetch snapshot, resume at projected position.
+- [x] Persist session state in DB.
+- [ ] On login: fetch snapshot and resume position.
 - [ ] Staleness rules: reset old snapshots.
 
 ---
 
-## 7. Testing (Unit, Integration, E2E)
+## 7. Search & Metadata
 
-- [ ] Unit tests for revision math, range handling.
+- [x] Unified search across albums, artists, tracks.
+- [x] `has_digital` flag applied to albums/tracks/artists.
+- [ ] Optimize queries for fewer roundtrips (bulk joins).
+- [ ] Improve tag/genre enrichment in search.
+
+---
+
+## 8. Frontend Updates
+
+- [x] Discover page → landing page:
+  - Union `albums[] + artists[*].albums + tracks[*].albums` → distinct → render AlbumCards.
+  - Show only items with `has_digital=true` by default.
+  - Debounced search calls `/music/search`.
+- [x] Player UI:
+  - Show play/pause/seek/next/prev controls bound to new endpoints.
+  - Show devices and allow switching active speaker.
+- [ ] Collection page: infinite scroll + sort refinements.
+
+---
+
+## 9. Testing (Unit, Integration, E2E)
+
+- [ ] Unit tests: revision math, range handling.
 - [ ] Integration: Redis fan-out, reconnect correctness.
-- [ ] E2E: two devices controlling same session, speaker switching, like events.
+- [ ] E2E: two devices controlling same session, speaker switching, queue advance, like events.

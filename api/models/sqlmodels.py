@@ -2,7 +2,7 @@ from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy import func
 from typing import Optional, List
 from datetime import datetime, UTC,  timezone
-from sqlalchemy import BigInteger, Column, String, ForeignKeyConstraint, UniqueConstraint
+from sqlalchemy import BigInteger, Column, String, ForeignKeyConstraint, UniqueConstraint, Column, DateTime
 from typing import Annotated
 from uuid import UUID, uuid4
 from datetime import datetime, date
@@ -10,17 +10,13 @@ from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, FLOAT, INTEGER, DATE
 from pgvector.sqlalchemy import Vector
 
-def now_utc_naive():
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
 class RefreshToken(SQLModel, table=True):
     __tablename__ = "refresh_token"
     refresh_token_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
     user_uuid: UUID = Field(index=True, nullable=False)
     token: str  # store this raw or hashed
     created_at: datetime = Field(
-        default_factory=now_utc_naive,
-        sa_column_kwargs={"server_default": func.now()}
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     revoked: bool = Field(default=False)
 
@@ -49,8 +45,7 @@ class User(SQLModel, table=True):
     status: str
     email: str
     created_at: datetime = Field(
-        default_factory=now_utc_naive,
-        sa_column_kwargs={"server_default": func.now()}
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
 
     password: str
@@ -64,7 +59,9 @@ class TrackVersionTagBridge(SQLModel, table=True):
     track_version_uuid: UUID = Field(foreign_key="track_version.track_version_uuid", primary_key=True)
     tag_uuid: UUID = Field(foreign_key="tag.tag_uuid", primary_key=True)
     count: int = 0  # from MusicBrainz 'count'
-    created_at: datetime = Field(default_factory=now_utc_naive, sa_column_kwargs={"server_default": func.now()})
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
 
 class TrackVersionGenreBridge(SQLModel, table=True):
     __tablename__ = "track_version_genre_bridge"
@@ -72,7 +69,9 @@ class TrackVersionGenreBridge(SQLModel, table=True):
     track_version_uuid: UUID = Field(foreign_key="track_version.track_version_uuid", primary_key=True)
     genre_uuid: UUID = Field(foreign_key="genre.genre_uuid", primary_key=True)
     count: int = 0  # from MusicBrainz 'count'
-    created_at: datetime = Field(default_factory=now_utc_naive, sa_column_kwargs={"server_default": func.now()})
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
 
 class AlbumTagBridge(SQLModel, table=True):
     __tablename__ = "album_tag_bridge"
@@ -100,8 +99,7 @@ class AlbumType(SQLModel, table=True):
     description: Optional[str]
     albums: List["Album"] = Relationship(back_populates="types", link_model=AlbumTypeBridge)
     created_at: datetime = Field(
-        default_factory=now_utc_naive,
-        sa_column_kwargs={"server_default": func.now()}
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
 
 class AlbumReleaseTagBridge(SQLModel, table=True):
@@ -129,7 +127,9 @@ class Tag(SQLModel, table=True):
 
     tag_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
     name: str
-    created_at: datetime = Field(default_factory=now_utc_naive, sa_column_kwargs={"server_default": func.now()})
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
 
     albums: List["Album"] = Relationship(back_populates="tags", link_model=AlbumTagBridge)
     album_releases: List["AlbumRelease"] = Relationship(back_populates="tags", link_model=AlbumReleaseTagBridge)
@@ -143,7 +143,9 @@ class Genre(SQLModel, table=True):
 
     genre_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
     name: str
-    created_at: datetime = Field(default_factory=now_utc_naive, sa_column_kwargs={"server_default": func.now()})
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
 
     albums: List["Album"] = Relationship(back_populates="genres", link_model=AlbumGenreBridge)
     album_releases: List["AlbumRelease"] = Relationship(back_populates="genres", link_model=AlbumReleaseGenreBridge)
@@ -156,8 +158,7 @@ class DiscogsOAuthTemp(SQLModel, table=True):
     oauth_token_secret: str
     user_uuid: UUID = Field(foreign_key="appuser.user_uuid", nullable=False)
     created_at: datetime = Field(
-        default_factory=now_utc_naive,
-        sa_column_kwargs={"server_default": func.now()}
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
 
 class SpotifyToken(SQLModel, table=True):
@@ -225,8 +226,7 @@ class PlaybackHistory(SQLModel, table=True):
     track_uuid: Optional[UUID] = Field(foreign_key="track.track_uuid")
     album_uuid: Optional[UUID] = Field(foreign_key="album.album_uuid")
     played_at: datetime = Field(
-        default_factory=now_utc_naive,
-        sa_column_kwargs={"server_default": func.now()}
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     source: str = "spotify"
     device_uuid: UUID = Field(foreign_key="device.device_uuid")
@@ -275,8 +275,7 @@ class Album(SQLModel, table=True):
     image_url: Optional[str]
     image_thumbnail_url: Optional[str]
     created_at: datetime = Field(
-        default_factory=now_utc_naive,
-        sa_column_kwargs={"server_default": func.now()}
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     quality: Optional[str]
     collectionalbumbridge: List["CollectionAlbumBridge"] = Relationship(back_populates="album")
@@ -309,8 +308,7 @@ class AlbumRelease(SQLModel, table=True):
     image_url: Optional[str]
     image_thumbnail_url: Optional[str]
     created_at: datetime = Field(
-        default_factory=now_utc_naive,
-        sa_column_kwargs={"server_default": func.now()}
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     quality: Optional[str]
 
@@ -329,8 +327,7 @@ class Artist(SQLModel, table=True):
     name_variations: Optional[str]
     profile: Optional[str]
     created_at: datetime = Field(
-        default_factory=now_utc_naive,
-        sa_column_kwargs={"server_default": func.now()}
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     albums: List["Album"] = Relationship(back_populates="artists", link_model=AlbumArtistBridge)
     album_releases: Optional[List["AlbumRelease"]] = Relationship(back_populates="artists", link_model=AlbumReleaseArtistBridge)
@@ -377,8 +374,7 @@ class TrackVersionExtraArtist(SQLModel, table=True):
     artist_uuid: UUID = Field(foreign_key="artist.artist_uuid", primary_key=True)
     role: Optional[str] = None  # For storing the role (e.g., "Remix", "Producer")
     created_at: datetime = Field(
-        default_factory=now_utc_naive,
-        sa_column_kwargs={"server_default": func.now()}
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     track_version: "TrackVersion" = Relationship(back_populates="extra_artists")
 
@@ -393,11 +389,11 @@ class TrackVersion(SQLModel, table=True):
         back_populates="track_versions",
         link_model=TrackVersionAlbumReleaseBridge
     )
-    collection_tracks: List["CollectionTrack"] = Relationship(back_populates="track_version")
+    library_tracks: List["LibraryTrack"] = Relationship(back_populates="track_version")
+
 
     created_at: datetime = Field(
-        default_factory=now_utc_naive,
-        sa_column_kwargs={"server_default": func.now()}
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     quality: Optional[str]
     extra_artists: List[TrackVersionExtraArtist] = Relationship(back_populates="track_version")
@@ -440,38 +436,43 @@ class CollectionAlbumReleaseBridge(SQLModel, table=True):
 
 class Collection(SQLModel, table=True):
     __tablename__ = "collection"
+
     collection_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
     collection_name: str
     user_uuid: UUID = Field(foreign_key="appuser.user_uuid")
+
     user: Optional["User"] = Relationship(back_populates="collections")
     albums: List["Album"] = Relationship(link_model=CollectionAlbumBridge)
     album_releases: List["AlbumRelease"] = Relationship(
         link_model=CollectionAlbumReleaseBridge
     )
-    tracks: List["CollectionTrack"] = Relationship(back_populates="collection")
+
     created_at: datetime = Field(
-        default_factory=now_utc_naive,
-        sa_column_kwargs={"server_default": func.now()}
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
 
-class CollectionTrack(SQLModel, table=True):
-    __tablename__ = "collection_track"
+class LibraryTrack(SQLModel, table=True):
+    __tablename__ = "library_track"
 
-    collection_track_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
-    collection_uuid: UUID = Field(foreign_key="collection.collection_uuid", index=True)
-    track_version_uuid: UUID = Field(foreign_key="track_version.track_version_uuid", index=True)
+    library_track_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
+    track_version_uuid: UUID = Field(
+        foreign_key="track_version.track_version_uuid", index=True
+    )
     path: Optional[str] = None
-    quality: str | None = Field(default=None)  # e.g., FLAC, MP3 320kbps
-    format: str | None = Field(default=None)
-    added_at: datetime = Field(default_factory=datetime.utcnow)
+    quality: str | None = None  # e.g. FLAC, MP3 320
+    duration_ms: int | None = None
+
+    added_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
 
     __table_args__ = (
-        UniqueConstraint("collection_uuid", "track_version_uuid", "format"),
+        UniqueConstraint("track_version_uuid"),
     )
 
-    collection: "Collection" = Relationship(back_populates="tracks")
-    track_version: "TrackVersion" = Relationship(back_populates="collection_tracks")
-    duration_ms: int | None = Field(default=None, description="Duration of track in milliseconds")
+    track_version: "TrackVersion" = Relationship(back_populates="library_tracks")
+
+
 
 class FileScanCache(SQLModel, table=True):
     __tablename__ = "file_scan_cache"
@@ -480,7 +481,9 @@ class FileScanCache(SQLModel, table=True):
     path: str = Field(index=True, unique=True, nullable=False)
     size: int = Field(nullable=False)
     mtime: float = Field(nullable=False)  # store as UNIX timestamp
-    scanned_at: datetime = Field(default_factory=datetime.utcnow)
+    scanned_at:  datetime = Field(
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
 
 class PlaybackQueue(SQLModel, table=True):
     __tablename__ = "playback_queue"
@@ -489,12 +492,10 @@ class PlaybackQueue(SQLModel, table=True):
     user_uuid: UUID = Field(foreign_key="appuser.user_uuid", index=True, nullable=False)
     track_version_uuid: UUID = Field(foreign_key="track_version.track_version_uuid", nullable=False)
     position: int = Field(nullable=False)  # order in queue
-    added_at: datetime = Field(default_factory=now_utc_naive)
+    added_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
     added_by: str | None = None  # "user", "auto", "album", etc.
-
-    # convenience flags
-    played: bool = Field(default=False)
-    skipped: bool = Field(default=False)
 
     # Relationships
     user: "User" = Relationship()
@@ -506,11 +507,12 @@ class PlaybackQueue(SQLModel, table=True):
 
 class PlaybackSession(SQLModel, table=True):
     __tablename__ = "playback_session"
-
+    current_queue_uuid: UUID | None = Field(default=None, foreign_key="playback_queue.playback_queue_uuid")
     session_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
     user_uuid: UUID = Field(foreign_key="appuser.user_uuid", nullable=False, unique=True)
-
     play_state: str = Field(default="paused")
     position_ms: int = Field(default=0)
     active_device: str | None = None
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )

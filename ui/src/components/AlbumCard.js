@@ -31,19 +31,24 @@ const AlbumCard = ({ albumRelease }) => {
   const formattedDate = release_date ? new Date(release_date).toLocaleDateString() : "—";
 
   const handlePlay = async (e, album_uuid) => {
-  e.stopPropagation();
-  try {
-    await apiClient.post("/playback-sessions/me/play", { album_uuid });
-    console.log("Play requested:", album_uuid);
-  } catch (err) {
-    console.error("Failed to start playback", err);
-  }
-};
+      e.stopPropagation();
+      try {
+        await apiClient.post("/playback-sessions/play", { album_uuid });
+        console.log("Play requested:", album_uuid);
+      } catch (err) {
+        console.error("Failed to start playback", err);
+      }
+    };
 
-  const handleAddToQueue = (e) => {
-    e.stopPropagation();
-    console.log("Add album to queue:", album_uuid);
-  };
+  const handleAddToQueue = async (e, album_uuid) => {
+      e.stopPropagation();
+      try {
+        await apiClient.post("/playback-sessions/queue", { album_uuid });
+        console.log("queue requested:", album_uuid);
+      } catch (err) {
+        console.error("Failed to add to queue", err);
+      }
+    };
 
   return (
     <TableRow

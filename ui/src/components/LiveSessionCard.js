@@ -1,6 +1,8 @@
+// components/LiveSessionCard.jsx
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Card, CardContent, Typography, Chip, Box, Collapse, IconButton, Tooltip, Slider
+  Card, CardContent, Typography, Chip, Box, Collapse,
+  IconButton, Tooltip, Slider
 } from "@mui/material";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 import StreamIcon from "@mui/icons-material/Stream";
@@ -17,16 +19,67 @@ import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import "./LiveSessionCard.css";
 import apiClient from "../utils/apiClient";
 import { useNavigate } from "react-router-dom";
+import PlaybackQueueList from "./PlaybackQueueList";
+
 
 const LiveSessionCard = ({ token }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [connected, setConnected] = useState(false);
   const [currentTrack, setCurrentTrack] = useState(null);
+  const [queue, setQueue] = useState([]);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [position, setPosition] = useState(0); // ms
+  const [position, setPosition] = useState(0);
+  const [showQueue, setShowQueue] = useState(false);
 
   const audioRef = useRef(null);
   const navigate = useNavigate();
+
+  // --- Queue helpers
+  const handleReorder = async (newOrder) => {
+    try {
+      await apiClient.post("/playback-sessions/reorder", { queue: newOrder }, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (err) {
+      console.error("❌ Failed to reorder queue", err);
+    }
+  };
+
+const handleJump = async (item) => {
+  try {
+    await apiClient.post("/playback-sessions/jump", {
+      playback_queue_uuid: item.playback_queue_uuid,
+    }, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch (err) {
+    console.error("❌ Failed to jump to track", err);
+  }
+};
+
+  // --- API: fetch current playback state
+  const fetchQueue = async () => {
+    try {
+      const res = await apiClient.get("/playback-sessions", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setQueue(res.data.tracks || []);
+      if (res.data.now_playing) {
+        setCurrentTrack({
+          title: res.data.now_playing.track.name,
+          artist: res.data.now_playing.track.artists.map((a) => a.name).join(", "),
+          album: res.data.now_playing.track.albums?.[0]?.title ?? "—",
+          track_uuid: res.data.now_playing.track.track_uuid,
+          track_version_uuid: res.data.now_playing.track_version_uuid,
+          album_uuid: res.data.now_playing.track.albums?.[0]?.album_uuid ?? null,
+          file_url: res.data.now_playing.file_url,
+          duration_ms: res.data.now_playing.duration_ms,
+        });
+      }
+    } catch (err) {
+      console.error("❌ Failed to fetch queue", err);
+    }
+  };
 
   // --- SSE subscription
   useEffect(() => {
@@ -42,6 +95,7 @@ const LiveSessionCard = ({ token }) => {
         if (res.ok) {
           setConnected(true);
           console.log("✅ SSE connected");
+          fetchQueue();
         } else {
           console.error("❌ Failed to connect SSE", res);
         }
@@ -50,39 +104,48 @@ const LiveSessionCard = ({ token }) => {
         if (!event.data || event.data.trim() === "" || event.data.trim() === ":") return;
         try {
           const msg = JSON.parse(event.data);
-          console.log("📡 SSE:", msg);
 
-          if (msg.type === "timeline" && msg.now_playing) {
-            setCurrentTrack({
-              title: msg.now_playing.title,
-              artist: msg.now_playing.artist,
-              album: msg.now_playing.album,
-              track_uuid: msg.now_playing.track_uuid,
-              album_uuid: msg.now_playing.album_uuid ?? null,
-              file_url: msg.now_playing.file_url,
-              duration_ms: msg.now_playing.duration_ms,
-            });
+          if (msg.type === "timeline") {
             setIsPlaying(msg.play_state === "playing");
 
-            const audio = audioRef.current;
-            if (msg.now_playing.file_url) {
-              if (audio.src !== process.env.REACT_APP_API_URL + msg.now_playing.file_url) {
-                audio.src = process.env.REACT_APP_API_URL + msg.now_playing.file_url;
+            if (msg.now_playing) {
+              // update current track immediately
+              setCurrentTrack({
+                title: msg.now_playing.title,
+                artist: msg.now_playing.artist,
+                album: msg.now_playing.album,
+                track_uuid: msg.now_playing.track_uuid,
+                track_version_uuid: msg.now_playing.track_version_uuid,
+                album_uuid: msg.now_playing.album_uuid ?? null,
+                file_url: msg.now_playing.file_url,
+                duration_ms: msg.now_playing.duration_ms,
+              });
+
+              const audio = audioRef.current;
+              const newSrc = process.env.REACT_APP_API_URL + msg.now_playing.file_url;
+
+              if (audio.src !== newSrc) {
+                audio.src = newSrc;
                 audio.load();
               }
-              // sync position only if drift > 1s
-              if (msg.now_playing.position_ms != null) {
-                const target = msg.now_playing.position_ms / 1000;
-                if (Math.abs(audio.currentTime - target) > 1) {
-                  audio.currentTime = target;
-                }
-                setPosition(msg.now_playing.position_ms);
-              }
+
               if (msg.play_state === "playing") {
-                audio.play().catch(err => console.warn("⚠️ Play failed", err));
+                if (msg.now_playing.position_ms !== undefined) {
+                  const targetTime = msg.now_playing.position_ms / 1000;
+                  if (Math.abs(audio.currentTime - targetTime) > 0.25) {
+                    audio.currentTime = targetTime;
+                  }
+                }
+                audio.play().catch((err) => console.warn("⚠️ Play failed", err));
               } else {
                 audio.pause();
               }
+            }
+
+            fetchQueue(); // refresh queue for consistency
+          } else if (msg.type === "heartbeat") {
+            if (msg.position_ms !== undefined) {
+              setPosition(msg.position_ms);
             }
           }
         } catch (err) {
@@ -99,17 +162,35 @@ const LiveSessionCard = ({ token }) => {
     return () => ctrl.abort();
   }, [token]);
 
-  // --- Update position as audio plays
+  // --- Update local position
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-
     const handler = () => setPosition(audio.currentTime * 1000);
     audio.addEventListener("timeupdate", handler);
     return () => audio.removeEventListener("timeupdate", handler);
   }, [currentTrack]);
 
-  // --- API calls
+  // --- Auto-skip when track ends
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleEnded = async () => {
+      try {
+        await apiClient.post("/playback-sessions/next", {}, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch (err) {
+        console.error("❌ Failed to auto-skip next", err);
+      }
+    };
+
+    audio.addEventListener("ended", handleEnded);
+    return () => audio.removeEventListener("ended", handleEnded);
+  }, [token]);
+
+  // --- API controls
   const togglePlayPause = async () => {
     try {
       if (isPlaying) {
@@ -121,28 +202,13 @@ const LiveSessionCard = ({ token }) => {
       console.error("❌ Failed to toggle playback", err);
     }
   };
-
-  const skipNext = async () => {
-    try {
-      await apiClient.post("/playback-sessions/next", {}, { headers: { Authorization: `Bearer ${token}` } });
-    } catch (err) {
-      console.error("❌ Failed to skip next", err);
-    }
-  };
-
-  const skipPrevious = async () => {
-    try {
-      await apiClient.post("/playback-sessions/previous", {}, { headers: { Authorization: `Bearer ${token}` } });
-    } catch (err) {
-      console.error("❌ Failed to skip previous", err);
-    }
-  };
-
+  const skipNext = async () =>
+    apiClient.post("/playback-sessions/next", {}, { headers: { Authorization: `Bearer ${token}` } });
+  const skipPrevious = async () =>
+    apiClient.post("/playback-sessions/previous", {}, { headers: { Authorization: `Bearer ${token}` } });
   const handleSeek = async (_, value) => {
     try {
-      await apiClient.post("/playback-sessions/seek", { position_ms: value }, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      await apiClient.post("/playback-sessions/seek", { position_ms: value }, { headers: { Authorization: `Bearer ${token}` } });
       const audio = audioRef.current;
       if (audio) audio.currentTime = value / 1000;
       setPosition(value);
@@ -153,7 +219,6 @@ const LiveSessionCard = ({ token }) => {
 
   return (
     <Card sx={{ width: 360 }}>
-      {/* Hidden audio element */}
       <audio ref={audioRef} preload="auto" />
 
       {/* Header */}
@@ -178,29 +243,18 @@ const LiveSessionCard = ({ token }) => {
         <Card sx={{ maxWidth: 400 }}>
           <CardContent>
             {currentTrack ? (
-              <Box sx={{ position: "relative", textAlign: "center" }}>
-                <Typography variant="subtitle1" fontWeight="bold" color="white">
-                  {currentTrack.title}
-                </Typography>
-                <Typography variant="body2" sx={{ opacity: 0.8 }} color="white">
-                  {currentTrack.artist}
-                </Typography>
-                <Typography variant="caption" sx={{ opacity: 0.6 }} color="white">
-                  {currentTrack.album}
-                </Typography>
+              <Box sx={{ textAlign: "center" }}>
+                <Typography variant="subtitle1" fontWeight="bold">{currentTrack.title}</Typography>
+                <Typography variant="body2" sx={{ opacity: 0.8 }}>{currentTrack.artist}</Typography>
+                <Typography variant="caption" sx={{ opacity: 0.6 }}>{currentTrack.album}</Typography>
                 {currentTrack.album_uuid && (
                   <Tooltip title="Go to album">
-                    <IconButton
-                      size="small"
-                      onClick={() => navigate(`/album/${currentTrack.album_uuid}`)}
-                      sx={{ ml: 1, p: 0.5 }}
-                    >
+                    <IconButton size="small" onClick={() => navigate(`/album/${currentTrack.album_uuid}`)} sx={{ ml: 1, p: 0.5 }}>
                       <InfoIcon sx={{ color: "white", opacity: 0.6 }} />
                     </IconButton>
                   </Tooltip>
                 )}
 
-                {/* Seek Slider */}
                 <Slider
                   value={position}
                   min={0}
@@ -216,6 +270,18 @@ const LiveSessionCard = ({ token }) => {
             )}
           </CardContent>
 
+          {/* Queue Drawer */}
+          <Collapse in={showQueue} timeout="auto" unmountOnExit>
+            <Box sx={{ maxHeight: 240, overflowY: "auto", bgcolor: "grey.100" }}>
+              <PlaybackQueueList
+                queue={queue}
+                currentTrack={currentTrack}
+                onPlayTrack={handleJump}
+                onReorder={handleReorder}
+              />
+            </Box>
+          </Collapse>
+
           {/* Playback Ribbon */}
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", bgcolor: "grey.900", color: "white", px: 1, py: 0.5 }}>
             <IconButton color="inherit" size="small" onClick={skipPrevious}><SkipPreviousIcon /></IconButton>
@@ -223,7 +289,7 @@ const LiveSessionCard = ({ token }) => {
               {isPlaying ? <PauseIcon /> : <PlayArrowIcon />}
             </IconButton>
             <IconButton color="inherit" size="small" onClick={skipNext}><SkipNextIcon /></IconButton>
-            <IconButton color="inherit" size="small"><MenuIcon /></IconButton>
+            <IconButton color="inherit" size="small" onClick={() => setShowQueue((prev) => !prev)}><MenuIcon /></IconButton>
             <IconButton color="inherit" size="small" onClick={() => setCollapsed(true)}><ExpandLessIcon /></IconButton>
           </Box>
         </Card>

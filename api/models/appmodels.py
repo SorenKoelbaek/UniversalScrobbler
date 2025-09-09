@@ -1,25 +1,38 @@
-from typing import Optional, Union
+from typing import Optional, Union, Generic, TypeVar, List
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, field_serializer, field_validator, model_validator, Field, AliasPath, computed_field, root_validator
+from pydantic import (
+    BaseModel,
+    EmailStr,
+    field_serializer,
+    Field,
+    AliasPath,
+    root_validator,
+)
 from datetime import datetime, timezone
-from typing import Generic, TypeVar, List
 
 T = TypeVar("T")
+
+# -------------------------------------------------------------------
+# Device / Playback History
+# -------------------------------------------------------------------
+
 class DeviceBase(BaseModel):
     device_uuid: UUID
     device_name: str
     location: Optional[str] = None
-    context : Optional[str] = None
+    context: Optional[str] = None
+
 
 class PlaybackHistoryBase(BaseModel):
-    playback_history_uuid:UUID
+    playback_history_uuid: UUID
     spotify_track_id: Optional[str]
     played_at: datetime
     source: Optional[str]
     full_play: Optional[bool] = False
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class PlaybackHistoryRead(PlaybackHistoryBase):
     track: "TrackBase"
@@ -27,28 +40,35 @@ class PlaybackHistoryRead(PlaybackHistoryBase):
     device: DeviceBase
 
     class Config:
-        from_attributes=True
+        from_attributes = True
 
 
 class PlaybackHistorySimple(PlaybackHistoryBase):
     track_uuid: UUID
     album_uuid: UUID
-    song_title:str = Field(..., alias=AliasPath("track", "name"))
+    song_title: str = Field(..., alias=AliasPath("track", "name"))
     title: str = Field(..., alias=AliasPath("album", "title"))
     artists: List["ArtistBase"] = Field(..., alias=AliasPath("album", "artists"))
-    release_date: Optional[datetime] = Field(..., alias=AliasPath("album", "release_date"))
+    release_date: Optional[datetime] = Field(
+        ..., alias=AliasPath("album", "release_date")
+    )
     full_update: Optional[bool] = False
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class CurrentlyPlaying(PlaybackHistorySimple):
     duration_seconds: Optional[int] = None
     is_still_playing: bool
 
-
     class Config:
-        from_attributes=True
+        from_attributes = True
+
+
+# -------------------------------------------------------------------
+# Tokens
+# -------------------------------------------------------------------
 
 class SpotifyTokenRead(BaseModel):
     spotify_token_uuid: UUID
@@ -59,133 +79,155 @@ class SpotifyTokenRead(BaseModel):
     def serialize_expires_at(self, dt: datetime, _info) -> str:
         return dt.replace(tzinfo=timezone.utc).isoformat()
 
+
 class DiscogsTokenRead(BaseModel):
     discogs_token_uuid: UUID
     access_token: str
 
+
+# -------------------------------------------------------------------
+# User
+# -------------------------------------------------------------------
+
 class UserBase(BaseModel):
-    """Base model for a user."""
     username: str
     email: str
     status: Optional[str] = None
 
 
 class UserRead(UserBase):
-    """Model for reading user details."""
     user_uuid: UUID
     spotify_token: Optional[SpotifyTokenRead]
     discogs_token: Optional[DiscogsTokenRead]
+
 
 class UserCreate(BaseModel):
     username: str
     email: EmailStr
     password: str
 
+
 class SpotifyAuthRequest(BaseModel):
     code: str
+
 
 class DiscogsAuthRequest(BaseModel):
     oauth_token: str
     oauth_verifier: str
 
 
-# Base Models for database entities
+# -------------------------------------------------------------------
+# Music Models
+# -------------------------------------------------------------------
+
 class TrackBase(BaseModel):
     track_uuid: UUID
     name: str
     track_number: Optional[str] = None
+    library_track_uuid: UUID | None = None
+    track_position: Optional[int] = None  # Normalized 1..N index
+    has_digital: bool = False
 
     class Config:
-        from_attributes=True
+        from_attributes = True
 
 
 class ArtistBase(BaseModel):
     artist_uuid: UUID
     name: str
 
-
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class AlbumTypeBase(BaseModel):
     album_type_uuid: UUID
     name: str
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class AlbumTypeRead(AlbumTypeBase):
     description: Optional[str] = None
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class AlbumBase(BaseModel):
     image_url: Optional[str] = None
     image_thumbnail_url: Optional[str] = None
     album_uuid: UUID
     title: str
-    discogs_master_id: Optional[int] = None  # Master ID for the album
+    discogs_master_id: Optional[int] = None
     release_date: Optional[datetime] = None
-    types: List[AlbumTypeBase] = []  # List of types (e.g., LP, EP, etc.)
+    types: List[AlbumTypeBase] = []
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class AlbumSimpleRead(AlbumBase):
-    artists: List[ArtistBase]  # List of artists associated with this master album
+    artists: List[ArtistBase]
 
 
-# New Model to represent Album Releases (specific versions of an album)
 class AlbumReleaseBase(BaseModel):
     album_release_uuid: UUID
     title: str
     discogs_release_id: Optional[int] = None
-    release_date: Optional[datetime] = None  # The release date for this specific version
-    country: Optional[str] = None  # The country of release
-    is_main_release: bool = False  # Is this the main release for the album (usually for master album)
+    release_date: Optional[datetime] = None
+    country: Optional[str] = None
+    is_main_release: bool = False
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class TrackVersionBase(BaseModel):
     track_version_uuid: UUID
-    album_releases: Optional[List[AlbumReleaseBase]] = []  # The album release this version belongs to
-    duration: Optional[int] = None  # Duration of the track in seconds
+    album_releases: Optional[List[AlbumReleaseBase]] = []
+    duration: Optional[int] = None
     recording_id: str
-    tags: List["TagBase"] = []  # List of tags associated with this track version
+    tags: List["TagBase"] = []
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class TrackReadSimple(TrackBase):
     albums: List[AlbumBase]
     artists: List[ArtistBase]
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class TrackRead(TrackReadSimple):
     track_versions: List[TrackVersionBase]
-    class Config:
-        from_attributes=True
 
-# Artist with albums they are associated with
+    class Config:
+        from_attributes = True
+
+
 class ArtistRead(ArtistBase):
     discogs_artist_id: Optional[int]
     name_variations: Optional[str] = None
     profile: Optional[str] = None
-    albums: Optional[List[AlbumBase]] = []  # List of albums (master) the artist is featured on
-    album_releases: Optional[List[AlbumReleaseBase]] = []  # List of album releases the artist is featured on
+    albums: Optional[List[AlbumBase]] = []
+    album_releases: Optional[List[AlbumReleaseBase]] = []
     tags: List["TagBase"] = []
+
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class AlbumSimple(AlbumBase):
-    artists: List[ArtistBase]  # List of artists associated with this master album
+    artists: List[ArtistBase]
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class TagBase(BaseModel):
     tag_uuid: UUID
@@ -193,25 +235,26 @@ class TagBase(BaseModel):
     count: Optional[int] = 0
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class GenreBase(BaseModel):
     genre_uuid: UUID
     name: str
 
     class Config:
-        from_attributes=True
+        from_attributes = True
 
 
-# AlbumRead reflects the "master album" which may have many releases
 class AlbumRead(AlbumBase):
-    releases: List[AlbumReleaseBase]  # List of releases for this master album
-    artists: List[ArtistBase]  # List of artists associated with this master album
-    tracks: List[TrackBase]  # List of tracks for this master album (not specific to any release)
-    tags: List[TagBase] = []  # List of genres associated with this album
-
+    releases: List[AlbumReleaseBase]
+    artists: List[ArtistBase]
+    tracks: List[TrackBase]
+    tags: List[TagBase] = []
+    has_digital: bool = False
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class CollectionAlbumFormatRead(BaseModel):
     format: str
@@ -219,6 +262,7 @@ class CollectionAlbumFormatRead(BaseModel):
 
     class Config:
         from_attributes = True
+
 
 class AlbumFlat(BaseModel):
     album_uuid: UUID
@@ -231,30 +275,29 @@ class AlbumFlat(BaseModel):
     releases: List[AlbumReleaseBase] = []
     formats: List[CollectionAlbumFormatRead] = Field(
         default_factory=list,
-        alias=AliasPath("collectionalbumbridge", 0, "formats")  # 🔑 reach through bridge
+        alias=AliasPath("collectionalbumbridge", 0, "formats"),
     )
-
 
     class Config:
         from_attributes = True
         populate_by_name = True
 
-# AlbumReleaseRead reflects a specific release of an album
+
 class AlbumReleaseRead(AlbumReleaseBase):
-    album: AlbumBase  # The master album for this release
-    artists: List[ArtistBase]  # Artists for this specific release
-    tracks: List[TrackBase]  # Tracks for this specific release
+    album: AlbumBase
+    artists: List[ArtistBase]
+    tracks: List[TrackBase]
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class AlbumReleaseSimple(BaseModel):
     album_release_uuid: UUID
     discogs_release_id: Optional[int]
 
     class Config:
-        from_attributes=True
-
+        from_attributes = True
 
 
 class AlbumInCollection(AlbumSimple):
@@ -263,44 +306,53 @@ class AlbumInCollection(AlbumSimple):
     class Config:
         from_attributes = True
 
+
+# -------------------------------------------------------------------
+# Collections
+# -------------------------------------------------------------------
+
 class CollectionBase(BaseModel):
     collection_uuid: UUID
     collection_name: str
 
     class Config:
-        from_attributes=True
+        from_attributes = True
 
-class CollectionTrackBase(BaseModel):
-    collection_track_uuid: UUID
-    collection_uuid: UUID
+
+class LibraryTrackBase(BaseModel):
+    library_track_uuid: UUID
     track_version_uuid: UUID
     path: Optional[str] = None
     quality: Optional[str] = None
-    format: Optional[str] = None
+    duration_ms: Optional[int] = None
     added_at: datetime
 
     class Config:
         from_attributes = True
 
-class CollectionTrackRead(CollectionTrackBase):
+
+class LibraryTrackRead(LibraryTrackBase):
     track_version: Optional[TrackVersionBase] = None
 
     class Config:
         from_attributes = True
+
 
 class CollectionSimple(CollectionBase):
     albums: List[AlbumBase]
     album_releases: List[AlbumReleaseSimple]
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
 
 class CollectionSimpleRead(CollectionBase):
     albums: list[AlbumFlat]
-    tracks: List[CollectionTrackRead]
+    tracks: List[LibraryTrackRead]
 
     class Config:
         from_attributes = True
+
 
 class PaginatedResponse(BaseModel, Generic[T]):
     total: int
@@ -308,19 +360,25 @@ class PaginatedResponse(BaseModel, Generic[T]):
     limit: int
     items: List[T]
 
-# CollectionRead represents a user's collection and all albums/releases in it
+
 class CollectionRead(CollectionBase):
-    albums: List[AlbumInCollection]  # List of albums (master) in the collection
-    album_releases: List[AlbumReleaseBase]  # List of album releases in the collection
-    created_at: Optional[datetime]  # Track when collection was created
-    tracks: List[CollectionTrackRead]
+    albums: List[AlbumInCollection]
+    album_releases: List[AlbumReleaseBase]
+    created_at: Optional[datetime]
+    tracks: List[LibraryTrackRead]
 
     class Config:
-        from_attributes=True
+        from_attributes = True
+
+
+# -------------------------------------------------------------------
+# Search + Playback
+# -------------------------------------------------------------------
 
 class MusicSearchResponse(BaseModel):
-    type: str
-    result: Union[List[TrackReadSimple],List[AlbumRead],List[ArtistRead]]
+    albums: List[AlbumRead]
+    artists: List[ArtistRead]
+    tracks: List[TrackReadSimple]
 
 
 class PlaybackUpdateTrack(BaseModel):
@@ -337,7 +395,7 @@ class PlaybackUpdateDevice(BaseModel):
 
 class PlaybackUpdatePayload(BaseModel):
     state: Optional[str]
-    source: Optional[str]  # NEW: 'spotify' or 'shazam'
+    source: Optional[str]
     track: Optional[PlaybackUpdateTrack]
     device: Optional[PlaybackUpdateDevice]
 
@@ -346,6 +404,7 @@ class websocketMessage(BaseModel):
     type: Optional[str]
     payload: Optional[dict]
 
+
 class AlbumFindSimilarRequest(BaseModel):
     albums: List[UUID]
     years: Optional[List[int]] = None
@@ -353,19 +412,23 @@ class AlbumFindSimilarRequest(BaseModel):
     styles: Optional[List[UUID]] = None
     types: Optional[List[UUID]] = None
 
+
 class ListenArtist(BaseModel):
     name: str
     mbid: Optional[str]
 
+
 class ListenAlbum(BaseModel):
     name: str
     mbid: Optional[str]
+
 
 class ListenTrack(BaseModel):
     name: str
     duration_ms: Optional[int]
     mbid: Optional[str]
     uri: Optional[str]
+
 
 class ListenEvent(BaseModel):
     source: str
@@ -374,6 +437,7 @@ class ListenEvent(BaseModel):
     track: ListenTrack
     album: ListenAlbum
     artists: List[ListenArtist]
+
 
 class PlayRequest(BaseModel):
     track_uuid: Optional[UUID] = None
@@ -385,10 +449,15 @@ class PlayRequest(BaseModel):
     def ensure_one_field(cls, values):
         provided = [k for k, v in values.items() if v is not None]
         if len(provided) == 0:
-            raise ValueError("One of track_uuid, track_version_uuid, album_uuid, or artist_uuid must be provided")
+            raise ValueError(
+                "One of track_uuid, track_version_uuid, album_uuid, or artist_uuid must be provided"
+            )
         if len(provided) > 1:
-            raise ValueError("Only one of track_uuid, track_version_uuid, album_uuid, or artist_uuid may be provided")
+            raise ValueError(
+                "Only one of track_uuid, track_version_uuid, album_uuid, or artist_uuid may be provided"
+            )
         return values
+
 
 class PlaybackQueueItem(BaseModel):
     playback_queue_uuid: UUID
@@ -397,13 +466,12 @@ class PlaybackQueueItem(BaseModel):
     position: int
     added_at: datetime
     added_by: str | None = None
-    played: bool
-    skipped: bool
-    duration_ms: int | None = None  # ✅ add this
-    file_url: str | None = None  # ✅ for proxied file playback
+    duration_ms: int | None = None
+    file_url: str | None = None
 
     class Config:
-        from_attributes = True  # ✅ allows ORM -> Pydantic conversion
+        from_attributes = True
+
 
 class PlaybackQueueSimple(BaseModel):
     playback_queue_uuid: UUID
@@ -414,7 +482,8 @@ class PlaybackQueueSimple(BaseModel):
     now_playing: PlaybackQueueItem | None = None
 
     class Config:
-        from_attributes = True  # ✅ allows ORM -> Pydantic conversion
+        from_attributes = True
+
 
 class NowPlayingEvent(BaseModel):
     track_uuid: UUID
@@ -428,5 +497,7 @@ class NowPlayingEvent(BaseModel):
     position_ms: int
     play_state: str
 
+
 class SeekRequest(BaseModel):
     position_ms: int
+

@@ -30,7 +30,7 @@ async def login(
         )
 
     # Create access token
-    access_token_expires = timedelta(minutes=60)
+    access_token_expires = timedelta(minutes=60*24)
     access_token = create_access_token(
         data={"sub": str(user.user_uuid)},
         expires_delta=access_token_expires
@@ -58,6 +58,33 @@ from models.sqlmodels import RefreshToken
 from dependencies.auth import create_access_token
 from datetime import datetime, timedelta
 import secrets
+
+
+@router.post("/revoke-token")
+async def revoke_token(
+    grant_type: str = Form(...),
+    refresh_token: str = Form(...),
+    db: Session = Depends(get_async_session)
+):
+    if grant_type != "refresh_token":
+        raise HTTPException(status_code=400, detail="Invalid grant_type")
+
+    # Lookup and validate token
+    statement = select(RefreshToken).where(
+        RefreshToken.token == refresh_token,
+        RefreshToken.revoked == False
+    )
+    result = await db.exec(statement)
+    token_entry = result.first()
+
+    if not token_entry:
+        raise HTTPException(status_code=401, detail="Invalid or already revoked refresh token")
+
+    # Revoke old token
+    token_entry.revoked = True
+    await db.commit()
+
+    return {"status": "revoked"}
 
 @router.post("/refresh-token")
 async def refresh_token(

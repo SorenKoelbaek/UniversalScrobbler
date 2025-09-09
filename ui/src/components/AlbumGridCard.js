@@ -10,6 +10,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import QueueMusicIcon from "@mui/icons-material/QueueMusic";
+import apiClient from "../utils/apiClient";
 
 const AlbumGridCard = ({ albumRelease }) => {
   const {
@@ -23,15 +24,25 @@ const AlbumGridCard = ({ albumRelease }) => {
 
   const navigate = useNavigate();
 
-    const handlePlay = (e) => {
-    e.stopPropagation(); // prevent row click navigation
-    console.log("Play album:", album_uuid);
-  };
+    const handlePlay = async (e, album_uuid) => {
+      e.stopPropagation();
+      try {
+        await apiClient.post("/playback-sessions/play", { album_uuid });
+        console.log("Play requested:", album_uuid);
+      } catch (err) {
+        console.error("Failed to start playback", err);
+      }
+    };
 
-  const handleAddToQueue = (e) => {
-    e.stopPropagation();
-    console.log("Add album to queue:", album_uuid);
-  };
+  const handleAddToQueue = async (e, album_uuid) => {
+      e.stopPropagation();
+      try {
+        await apiClient.post("/playback-sessions/queue", { album_uuid });
+        console.log("queue requested:", album_uuid);
+      } catch (err) {
+        console.error("Failed to add to queue", err);
+      }
+    };
 
 
   const artistNames = artists?.map((a) => a.name).join(", ") || "—";
