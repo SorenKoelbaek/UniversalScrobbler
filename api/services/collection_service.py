@@ -437,7 +437,7 @@ class CollectionService:
         and persist LibraryTrack rows (digital library).
         Falls back to placeholder entities (quality="poor") if MBID is missing.
         Uses FileScanCache to skip unchanged files between runs.
-        Enforces a max processing time per album directory (10s).
+        Enforces a max processing time per album directory (60s).
         """
 
         def normalize(s: str | None) -> str | None:
@@ -445,7 +445,7 @@ class CollectionService:
                 return None
             return re.sub(r"\s+", " ", s.strip().lower())
 
-        MAX_RELEASE_SECONDS = 10.0
+        MAX_RELEASE_SECONDS = 60.0
 
         # Reset cache if overwrite
         if overwrite:
@@ -469,6 +469,15 @@ class CollectionService:
                 for fname in files:
                     if not fname.lower().endswith(include_extensions):
                         continue
+
+                    # check elapsed time before processing this file
+                    elapsed = time.time() - dir_start
+                    if elapsed > MAX_RELEASE_SECONDS:
+                        logger.warning(
+                            f"⏱ Skipping remaining files in {root} – already {elapsed:.2f}s (> {MAX_RELEASE_SECONDS}s)"
+                        )
+                        await self.db.rollback()
+                        break
 
                     attempts += 1
                     dir_attempts += 1
@@ -633,13 +642,6 @@ class CollectionService:
                         logger.error(f"❌ Error processing {path}: {e}")
 
                 elapsed = time.time() - dir_start
-                if elapsed > MAX_RELEASE_SECONDS:
-                    logger.warning(
-                        f"⏱ Skipping release in {root} – took {elapsed:.2f}s (> {MAX_RELEASE_SECONDS}s)"
-                    )
-                    await self.db.rollback()
-                    continue
-
                 if dir_attempts > 0 and current_artist and current_album:
                     logger.debug(
                         f"Added {current_artist}, {current_album} "
@@ -664,4 +666,3 @@ class CollectionService:
             f"Scan finished: {attempts} files processed "
             f"({successes} successes, {attempts - successes} failures/skips)."
         )
-
