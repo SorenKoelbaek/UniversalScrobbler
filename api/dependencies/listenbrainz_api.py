@@ -42,7 +42,7 @@ class ListenBrainzAPI:
                 if e.response.status_code == 503 and attempt < self.max_retries - 1:
                     backoff = 2 ** attempt
                     logger.warning(
-                        f"503 from MusicBrainz, retry {attempt+1}/{self.max_retries} in {backoff}s: {url}"
+                        f"503 from ListenBrainz, retry {attempt+1}/{self.max_retries} in {backoff}s: {url}"
                     )
                     await asyncio.sleep(backoff)
                     continue
