@@ -930,9 +930,7 @@ class MusicBrainzService:
             return album_release.album, album_release
 
         release_data = await self.api.get_release(musicbrainz_release_id)
-        await asyncio.sleep(1)
         release_group = await self.api.get_release_group_by_release_id(musicbrainz_release_id)
-        await asyncio.sleep(1)
         recordings_data = await self.api.get_recordings_for_release(musicbrainz_release_id)
 
         album = await self.get_or_create_album_from_release_group(release_group)

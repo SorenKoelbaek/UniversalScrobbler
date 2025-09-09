@@ -12,6 +12,11 @@
 
 ---
 
+## 0. Current Bugs:
+
+- [ ] add to queue doesn't enforce album track order
+- [ ] login doesn't redirect to discover
+- 
 ## 1. Redis for Multi-Worker SSE
 
 - [x] Provision Redis + async client.

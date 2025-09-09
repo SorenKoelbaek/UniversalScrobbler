@@ -541,6 +541,10 @@ class CollectionService:
                             title,
                             mb_trackid,
                         )
+                        if not track_version:
+                            logger.warning(
+                                f"⚠ No track_version for {artist} - {album} - {title} on release {release_id}")
+                            continue
                         if track_version:
                             track_version.quality = "normal"
                     else:
