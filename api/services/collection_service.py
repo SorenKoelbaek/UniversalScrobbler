@@ -23,10 +23,7 @@ from services.discogs_service import DiscogsService
 from config import settings
 import logging
 import time
-import asyncio
 
-
-_scan_lock = asyncio.Lock()
 logger = logging.getLogger(__name__)
 
 discogs_api = DiscogsAPI()
@@ -448,224 +445,223 @@ class CollectionService:
                 return None
             return re.sub(r"\s+", " ", s.strip().lower())
 
-        async with _scan_lock:  # only serializes this one function
-            MAX_RELEASE_SECONDS = 10.0
+        MAX_RELEASE_SECONDS = 10.0
 
-            # Reset cache if overwrite
-            if overwrite:
-                await self.db.execute(delete(FileScanCache))
-                await self.db.commit()
-                logger.info("Overwrite enabled – flushed file_scan_cache.")
+        # Reset cache if overwrite
+        if overwrite:
+            await self.db.execute(delete(FileScanCache))
+            await self.db.commit()
+            logger.info("Overwrite enabled – flushed file_scan_cache.")
 
-            attempts = 0
-            successes = 0
-            release_cache: dict[tuple[str, str], str] = {}
-            placeholder_cache: dict[tuple[str, str], tuple[Album, AlbumRelease]] = {}
-            seen_paths: set[str] = set()
+        attempts = 0
+        successes = 0
+        release_cache: dict[tuple[str, str], str] = {}
+        placeholder_cache: dict[tuple[str, str], tuple[Album, AlbumRelease]] = {}
+        seen_paths: set[str] = set()
 
-            for root, _, files in os.walk(music_dir):
-                dir_start = time.time()
-                dir_successes = 0
-                dir_attempts = 0
-                current_artist, current_album = None, None
+        for root, _, files in os.walk(music_dir):
+            dir_start = time.time()
+            dir_successes = 0
+            dir_attempts = 0
+            current_artist, current_album = None, None
 
-                try:
-                    for fname in files:
-                        if not fname.lower().endswith(include_extensions):
-                            continue
-
-                        attempts += 1
-                        dir_attempts += 1
-                        if limit and attempts > limit:
-                            logger.info(
-                                f"Stopping after {limit} files "
-                                f"({successes} successes, {attempts - successes} failures/skips)."
-                            )
-                            return
-
-                        path = os.path.join(root, fname)
-                        try:
-                            stat = os.stat(path)
-                            size = stat.st_size
-                            mtime = stat.st_mtime
-
-                            # --- check cache ---
-                            result = await self.db.execute(
-                                select(FileScanCache).where(FileScanCache.path == path)
-                            )
-                            cached = result.scalar_one_or_none()
-
-                            if cached and cached.size == size and cached.mtime == mtime:
-                                seen_paths.add(path)
-                            else:
-                                if cached:
-                                    cached.size = size
-                                    cached.mtime = mtime
-                                    cached.scanned_at = datetime.utcnow()
-                                else:
-                                    cached = FileScanCache(path=path, size=size, mtime=mtime)
-                                    self.db.add(cached)
-                                await self.db.flush()
-                                seen_paths.add(path)
-
-                            # --- metadata extraction ---
-                            meta = MutagenFile(path)
-                            if not meta or not meta.tags:
-                                continue
-                            tags = {k.lower(): v for k, v in meta.tags.items()}
-
-                            artist = tags.get("artist", [None])[0]
-                            album = tags.get("album", [None])[0]
-                            title = tags.get("title", [None])[0]
-                            mb_albumid = tags.get("musicbrainz_albumid", [None])[0]
-                            mb_trackid = tags.get("musicbrainz_trackid", [None])[0]
-
-                            duration_ms = None
-                            if getattr(meta, "info", None) and getattr(meta.info, "length", None):
-                                duration_ms = int(meta.info.length * 1000)
-
-                            if not artist or not album or not title:
-                                continue
-
-                            current_artist, current_album = artist, album
-                            cache_key = (normalize(artist), normalize(album))
-
-                            # --- Try MBID first ---
-                            release_id: str | None = mb_albumid
-                            if not release_id:
-                                if cache_key in release_cache:
-                                    release_id = release_cache[cache_key]
-                                else:
-                                    release_id = await self._resolve_album_via_mb(artist, album)
-                                    if release_id:
-                                        release_cache[cache_key] = release_id
-
-                            if release_id:
-                                album_obj, album_release = (
-                                    await self.musicbrainz_service.get_or_create_album_from_musicbrainz_release(
-                                        str(release_id))
-                                )
-                                album_obj.quality = "normal"
-                                album_release.quality = "normal"
-
-                                track_version = await self.musicbrainz_service.get_or_create_track_version(
-                                    str(release_id),
-                                    title,
-                                    mb_trackid,
-                                )
-                                if not track_version:
-                                    logger.warning(
-                                        f"⚠ No track_version for {artist} - {album} - {title} on release {release_id}")
-                                    continue
-                                if track_version:
-                                    track_version.quality = "normal"
-                            else:
-                                if cache_key not in placeholder_cache:
-                                    logger.warning(
-                                        f"⚠ No MBID for {artist} - {album}, creating placeholder with quality=poor")
-
-                                    album_obj = Album(title=album, quality="poor")
-                                    self.db.add(album_obj)
-                                    await self.db.flush()
-
-                                    artist_obj = await self.musicbrainz_service.get_or_create_artist_by_name(artist)
-                                    self.db.add(
-                                        AlbumArtistBridge(album_uuid=album_obj.album_uuid,
-                                                          artist_uuid=artist_obj.artist_uuid)
-                                    )
-
-                                    album_release = AlbumRelease(
-                                        album_uuid=album_obj.album_uuid,
-                                        title=album,
-                                        quality="poor"
-                                    )
-                                    self.db.add(album_release)
-                                    await self.db.flush()
-
-                                    placeholder_cache[cache_key] = (album_obj, album_release)
-
-                                album_obj, album_release = placeholder_cache[cache_key]
-
-                                track = Track(name=title, quality="poor", duration=duration_ms)
-                                self.db.add(track)
-                                await self.db.flush()
-                                self.db.add(TrackAlbumBridge(track_uuid=track.track_uuid, album_uuid=album_obj.album_uuid))
-
-                                track_version = TrackVersion(
-                                    track_uuid=track.track_uuid,
-                                    duration=duration_ms,
-                                    quality="poor"
-                                )
-                                self.db.add(track_version)
-                                await self.db.flush()
-                                self.db.add(TrackVersionAlbumReleaseBridge(
-                                    track_version_uuid=track_version.track_version_uuid,
-                                    album_release_uuid=album_release.album_release_uuid,
-                                ))
-
-                            # --- LibraryTrack handling ---
-                            result = await self.db.execute(
-                                select(LibraryTrack).where(
-                                    LibraryTrack.track_version_uuid == track_version.track_version_uuid,
-                                )
-                            )
-                            existing = result.scalar_one_or_none()
-
-                            if existing:
-                                if duration_ms and (not existing.duration_ms or existing.duration_ms != duration_ms):
-                                    existing.duration_ms = duration_ms
-                                    self.db.add(existing)
-                                    await self.db.flush()
-                                continue
-
-                            # insert new LibraryTrack
-                            ext = os.path.splitext(fname)[1].lower()
-                            fmt, quality = self._get_file_format_and_quality(meta, ext)
-                            lt = LibraryTrack(
-                                track_version_uuid=track_version.track_version_uuid,
-                                path=path,
-                                quality=quality,
-                                duration_ms=duration_ms,
-                            )
-                            self.db.add(lt)
-
-                            await self.db.commit()
-                            dir_successes += 1
-                            successes += 1
-
-                        except Exception as e:
-                            logger.error(f"❌ Error processing {path}: {e}")
-
-                    elapsed = time.time() - dir_start
-                    if elapsed > MAX_RELEASE_SECONDS:
-                        logger.warning(
-                            f"⏱ Skipping release in {root} – took {elapsed:.2f}s (> {MAX_RELEASE_SECONDS}s)"
-                        )
-                        await self.db.rollback()
+            try:
+                for fname in files:
+                    if not fname.lower().endswith(include_extensions):
                         continue
 
-                    if dir_attempts > 0 and current_artist and current_album:
-                        logger.debug(
-                            f"Added {current_artist}, {current_album} "
-                            f"{dir_successes}/{dir_attempts} tracks in {elapsed:.2f}s"
+                    attempts += 1
+                    dir_attempts += 1
+                    if limit and attempts > limit:
+                        logger.info(
+                            f"Stopping after {limit} files "
+                            f"({successes} successes, {attempts - successes} failures/skips)."
                         )
+                        return
 
-                except Exception as e:
-                    logger.error(f"❌ Fatal error in release {root}: {e}")
+                    path = os.path.join(root, fname)
+                    try:
+                        stat = os.stat(path)
+                        size = stat.st_size
+                        mtime = stat.st_mtime
+
+                        # --- check cache ---
+                        result = await self.db.execute(
+                            select(FileScanCache).where(FileScanCache.path == path)
+                        )
+                        cached = result.scalar_one_or_none()
+
+                        if cached and cached.size == size and cached.mtime == mtime:
+                            seen_paths.add(path)
+                        else:
+                            if cached:
+                                cached.size = size
+                                cached.mtime = mtime
+                                cached.scanned_at = datetime.utcnow()
+                            else:
+                                cached = FileScanCache(path=path, size=size, mtime=mtime)
+                                self.db.add(cached)
+                            await self.db.flush()
+                            seen_paths.add(path)
+
+                        # --- metadata extraction ---
+                        meta = MutagenFile(path)
+                        if not meta or not meta.tags:
+                            continue
+                        tags = {k.lower(): v for k, v in meta.tags.items()}
+
+                        artist = tags.get("artist", [None])[0]
+                        album = tags.get("album", [None])[0]
+                        title = tags.get("title", [None])[0]
+                        mb_albumid = tags.get("musicbrainz_albumid", [None])[0]
+                        mb_trackid = tags.get("musicbrainz_trackid", [None])[0]
+
+                        duration_ms = None
+                        if getattr(meta, "info", None) and getattr(meta.info, "length", None):
+                            duration_ms = int(meta.info.length * 1000)
+
+                        if not artist or not album or not title:
+                            continue
+
+                        current_artist, current_album = artist, album
+                        cache_key = (normalize(artist), normalize(album))
+
+                        # --- Try MBID first ---
+                        release_id: str | None = mb_albumid
+                        if not release_id:
+                            if cache_key in release_cache:
+                                release_id = release_cache[cache_key]
+                            else:
+                                release_id = await self._resolve_album_via_mb(artist, album)
+                                if release_id:
+                                    release_cache[cache_key] = release_id
+
+                        if release_id:
+                            album_obj, album_release = (
+                                await self.musicbrainz_service.get_or_create_album_from_musicbrainz_release(
+                                    str(release_id))
+                            )
+                            album_obj.quality = "normal"
+                            album_release.quality = "normal"
+
+                            track_version = await self.musicbrainz_service.get_or_create_track_version(
+                                str(release_id),
+                                title,
+                                mb_trackid,
+                            )
+                            if not track_version:
+                                logger.warning(
+                                    f"⚠ No track_version for {artist} - {album} - {title} on release {release_id}")
+                                continue
+                            if track_version:
+                                track_version.quality = "normal"
+                        else:
+                            if cache_key not in placeholder_cache:
+                                logger.warning(
+                                    f"⚠ No MBID for {artist} - {album}, creating placeholder with quality=poor")
+
+                                album_obj = Album(title=album, quality="poor")
+                                self.db.add(album_obj)
+                                await self.db.flush()
+
+                                artist_obj = await self.musicbrainz_service.get_or_create_artist_by_name(artist)
+                                self.db.add(
+                                    AlbumArtistBridge(album_uuid=album_obj.album_uuid,
+                                                      artist_uuid=artist_obj.artist_uuid)
+                                )
+
+                                album_release = AlbumRelease(
+                                    album_uuid=album_obj.album_uuid,
+                                    title=album,
+                                    quality="poor"
+                                )
+                                self.db.add(album_release)
+                                await self.db.flush()
+
+                                placeholder_cache[cache_key] = (album_obj, album_release)
+
+                            album_obj, album_release = placeholder_cache[cache_key]
+
+                            track = Track(name=title, quality="poor", duration=duration_ms)
+                            self.db.add(track)
+                            await self.db.flush()
+                            self.db.add(TrackAlbumBridge(track_uuid=track.track_uuid, album_uuid=album_obj.album_uuid))
+
+                            track_version = TrackVersion(
+                                track_uuid=track.track_uuid,
+                                duration=duration_ms,
+                                quality="poor"
+                            )
+                            self.db.add(track_version)
+                            await self.db.flush()
+                            self.db.add(TrackVersionAlbumReleaseBridge(
+                                track_version_uuid=track_version.track_version_uuid,
+                                album_release_uuid=album_release.album_release_uuid,
+                            ))
+
+                        # --- LibraryTrack handling ---
+                        result = await self.db.execute(
+                            select(LibraryTrack).where(
+                                LibraryTrack.track_version_uuid == track_version.track_version_uuid,
+                            )
+                        )
+                        existing = result.scalar_one_or_none()
+
+                        if existing:
+                            if duration_ms and (not existing.duration_ms or existing.duration_ms != duration_ms):
+                                existing.duration_ms = duration_ms
+                                self.db.add(existing)
+                                await self.db.flush()
+                            continue
+
+                        # insert new LibraryTrack
+                        ext = os.path.splitext(fname)[1].lower()
+                        fmt, quality = self._get_file_format_and_quality(meta, ext)
+                        lt = LibraryTrack(
+                            track_version_uuid=track_version.track_version_uuid,
+                            path=path,
+                            quality=quality,
+                            duration_ms=duration_ms,
+                        )
+                        self.db.add(lt)
+
+                        await self.db.commit()
+                        dir_successes += 1
+                        successes += 1
+
+                    except Exception as e:
+                        logger.error(f"❌ Error processing {path}: {e}")
+
+                elapsed = time.time() - dir_start
+                if elapsed > MAX_RELEASE_SECONDS:
+                    logger.warning(
+                        f"⏱ Skipping release in {root} – took {elapsed:.2f}s (> {MAX_RELEASE_SECONDS}s)"
+                    )
                     await self.db.rollback()
                     continue
 
-            # cleanup stale cache entries
-            result = await self.db.execute(select(FileScanCache.path))
-            all_cached = {row[0] for row in result.all()}
-            missing = all_cached - seen_paths
-            if missing:
-                await self.db.execute(delete(FileScanCache).where(FileScanCache.path.in_(missing)))
-                await self.db.commit()
-                logger.info(f"Removed {len(missing)} stale cache entries")
+                if dir_attempts > 0 and current_artist and current_album:
+                    logger.debug(
+                        f"Added {current_artist}, {current_album} "
+                        f"{dir_successes}/{dir_attempts} tracks in {elapsed:.2f}s"
+                    )
 
-            logger.info(
-                f"Scan finished: {attempts} files processed "
-                f"({successes} successes, {attempts - successes} failures/skips)."
-            )
+            except Exception as e:
+                logger.error(f"❌ Fatal error in release {root}: {e}")
+                await self.db.rollback()
+                continue
+
+        # cleanup stale cache entries
+        result = await self.db.execute(select(FileScanCache.path))
+        all_cached = {row[0] for row in result.all()}
+        missing = all_cached - seen_paths
+        if missing:
+            await self.db.execute(delete(FileScanCache).where(FileScanCache.path.in_(missing)))
+            await self.db.commit()
+            logger.info(f"Removed {len(missing)} stale cache entries")
+
+        logger.info(
+            f"Scan finished: {attempts} files processed "
+            f"({successes} successes, {attempts - successes} failures/skips)."
+        )
 

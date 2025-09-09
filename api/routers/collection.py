@@ -9,7 +9,7 @@ from sqlmodel import select
 from uuid import UUID
 from fastapi import Query
 import logging
-import asyncio
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -31,29 +31,24 @@ async def get_my_collections(
     return await collection_service.get_primary_collection(
         user.user_uuid, offset=offset, limit=limit, search=search)
 
-
 @router.post("/scan")
 async def scan_collection_directory(
     overwrite: bool,
+    background_tasks: BackgroundTasks,
     collection_id: UUID | None = None,
     db: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user)
 ):
     collection_service = CollectionService(db)
     user_id = user.user_uuid
 
     async def task():
-        try:
-            logger.debug("Starting background scan...")
-            await collection_service.scan_directory(
-                user_uuid=user_id,
-                overwrite=overwrite,
-            )
-            logger.debug("Background scan finished.")
-        except Exception as e:
-            logger.exception(f"❌ Background scan failed for user {user_id}: {e}")
+        logger.debug("Starting background scan...")
+        await collection_service.scan_directory(
+            user_uuid=user_id,
+            overwrite=overwrite
+        )
+        logger.debug("Background scan finished.")
 
-    # Proper async background execution
-    asyncio.create_task(task())
-
+    background_tasks.add_task(task)
     return {"status": "scan started in background"}
