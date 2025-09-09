@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime
 from typing import Optional, List
-
+from uuid import UUID
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -20,19 +20,32 @@ class ListenService:
 
     # --- record listen --------------------------------------------------------
     async def add_listen(
-        self,
-        user: User,
-        track_version_uuid,
-        device_uuid,
-        played_at: Optional[datetime] = None,
+            self,
+            user: User,
+            track_version_uuid: UUID,
+            device_uuid: UUID,
+            played_at: Optional[datetime] = None,
     ) -> PlaybackHistory:
-        """
-        Insert a new listen (scrobble) into PlaybackHistory.
-        Assumes track/album/device are already resolved upstream.
-        """
+        # fetch TrackVersion so we can resolve track + album
+        stmt = (
+            select(TrackVersion)
+            .where(TrackVersion.track_version_uuid == track_version_uuid)
+            .options(
+                selectinload(TrackVersion.track),
+                selectinload(TrackVersion.track).selectinload(Track.albums),
+            )
+        )
+        result = await self.db.execute(stmt)
+        track_version = result.scalar_one()
+
+        # grab the first linked album (or None)
+        album_uuid = track_version.track.albums[0].album_uuid if track_version.track.albums else None
+
         history = PlaybackHistory(
             user_uuid=user.user_uuid,
             track_version_uuid=track_version_uuid,
+            track_uuid=track_version.track_uuid,
+            album_uuid=album_uuid,
             device_uuid=device_uuid,
             played_at=played_at or datetime.utcnow(),
         )
@@ -42,9 +55,8 @@ class ListenService:
         await self.db.refresh(history)
 
         logger.info(
-            f"🎧 Added listen user={user.username} "
-            f"track_version={track_version_uuid} "
-            f"device={device_uuid} at {history.played_at}"
+            f"🎧 Added listen user={user.username} track_version={track_version_uuid} "
+            f"track={track_version.track_uuid} album={album_uuid} device={device_uuid}"
         )
         return history
 
