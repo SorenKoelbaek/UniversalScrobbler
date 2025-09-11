@@ -359,22 +359,23 @@ class PlaybackService:
     async def play(self, user_uuid: UUID, body: PlayRequest, device: dict | None = None) -> PlaybackQueueSimple:
         """Replace queue with new track/album/artist and start playing."""
         # first, check if we need to add scrobble from "previous"
-        await self._register_play_if_needed(user_uuid)
-        session = await self._get_or_create_session(user_uuid, device.get("device_id") if device else None, device.get("device_name") if device else None)
-        # Then clear session reference to avoid FK constraint error
+        await self._register_play_if_needed(user_uuid, device)
+
+        session = await self._get_or_create_session(
+            user_uuid,
+            device.get("device_id") if device else None,
+            device.get("device_name") if device else None,
+        )
         session.current_queue_uuid = None
         self.db.add(session)
-        await self.db.flush()  # make sure the FK is cleared before queue delete
+        await self.db.flush()
 
-        # Now it’s safe to delete old queue
         await self.db.execute(
             delete(PlaybackQueue).where(PlaybackQueue.user_uuid == user_uuid)
         )
 
-        # Enqueue new track(s)
         await self._enqueue(user_uuid, body, clear=False)
 
-        # Refresh session with first track from queue
         state = await self._get_queue(user_uuid)
         first_track = state.tracks[0] if state.tracks else None
 
@@ -399,10 +400,11 @@ class PlaybackService:
         await self._publish(user_uuid, "timeline")
         return await self._get_queue(user_uuid)
 
-    async def jump_to(self, user_uuid: UUID, playback_queue_uuid: UUID, device: dict | None = None) -> PlaybackQueueSimple:
+    async def jump_to(self, user_uuid: UUID, playback_queue_uuid: UUID,
+                      device: dict | None = None) -> PlaybackQueueSimple:
         """Skip directly to a specific queue entry and resume playback."""
-        await self._register_play_if_needed(user_uuid)
-        # make sure this entry exists in the queue
+        await self._register_play_if_needed(user_uuid, device)
+
         stmt = (
             select(PlaybackQueue)
             .where(
@@ -415,8 +417,11 @@ class PlaybackService:
         if not entry:
             raise ValueError(f"Queue entry {playback_queue_uuid} not found")
 
-        # update session anchor
-        session = await self._get_or_create_session(user_uuid, device.get("device_id") if device else None, device.get("device_name") if device else None)
+        session = await self._get_or_create_session(
+            user_uuid,
+            device.get("device_id") if device else None,
+            device.get("device_name") if device else None,
+        )
         session.current_queue_uuid = playback_queue_uuid
         session.position_ms = 0
         session.play_state = "playing"
@@ -428,7 +433,6 @@ class PlaybackService:
         await self._publish(user_uuid, "timeline")
         logger.info(f"⏭️ Jumped to queue entry {playback_queue_uuid} for {user_uuid}")
         return await self._get_queue(user_uuid)
-
     async def _enqueue(self, user_uuid: UUID, body: PlayRequest, clear: bool = False):
         if clear:
             await self.db.execute(
@@ -510,9 +514,13 @@ class PlaybackService:
 
     async def next(self, user_uuid: UUID, device: dict | None = None) -> PlaybackQueueSimple:
         """Advance to the next track in the queue (using current_queue_uuid)."""
-        await self._register_play_if_needed(user_uuid)
-        session = await self._get_or_create_session(user_uuid, device.get("device_id") if device else None, device.get("device_name") if device else None)
-        # fetch queue ordered
+        await self._register_play_if_needed(user_uuid, device)
+
+        session = await self._get_or_create_session(
+            user_uuid,
+            device.get("device_id") if device else None,
+            device.get("device_name") if device else None,
+        )
         stmt = (
             select(PlaybackQueue)
             .where(PlaybackQueue.user_uuid == user_uuid)
@@ -524,13 +532,12 @@ class PlaybackService:
         if not rows:
             return await self._get_queue(user_uuid)
 
-        # find index of current
         try:
             idx = next(i for i, r in enumerate(rows) if r.playback_queue_uuid == session.current_queue_uuid)
         except StopIteration:
             idx = -1
 
-        if idx + 1 < len(rows):  # move forward if possible
+        if idx + 1 < len(rows):
             session.current_queue_uuid = rows[idx + 1].playback_queue_uuid
             session.position_ms = 0
             session.play_state = "playing"
@@ -544,10 +551,13 @@ class PlaybackService:
 
     async def previous(self, user_uuid: UUID, device: dict | None = None) -> PlaybackQueueSimple:
         """Go back to the previous track in the queue (using current_queue_uuid)."""
-        await self._register_play_if_needed(user_uuid)
+        await self._register_play_if_needed(user_uuid, device)
 
-        session = await self._get_or_create_session(user_uuid, device.get("device_id") if device else None, device.get("device_name") if device else None)
-        # fetch queue ordered
+        session = await self._get_or_create_session(
+            user_uuid,
+            device.get("device_id") if device else None,
+            device.get("device_name") if device else None,
+        )
         stmt = (
             select(PlaybackQueue)
             .where(PlaybackQueue.user_uuid == user_uuid)
@@ -559,13 +569,12 @@ class PlaybackService:
         if not rows:
             return await self._get_queue(user_uuid)
 
-        # find index of current
         try:
             idx = next(i for i, r in enumerate(rows) if r.playback_queue_uuid == session.current_queue_uuid)
         except StopIteration:
-            idx = len(rows)  # not set yet → jump to last
+            idx = len(rows)
 
-        if idx - 1 >= 0:  # move back if possible
+        if idx - 1 >= 0:
             session.current_queue_uuid = rows[idx - 1].playback_queue_uuid
             session.position_ms = 0
             session.play_state = "playing"
