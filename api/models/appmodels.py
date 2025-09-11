@@ -45,14 +45,12 @@ class PlaybackHistoryRead(PlaybackHistoryBase):
 
 
 class PlaybackHistorySimple(PlaybackHistoryBase):
-    track_uuid: UUID
-    album_uuid: UUID
-    song_title: str = Field(..., alias=AliasPath("track", "name"))
-    title: str = Field(..., alias=AliasPath("album", "title"))
-    artists: List["ArtistBase"] = Field(..., alias=AliasPath("album", "artists"))
-    release_date: Optional[datetime] = Field(
-        ..., alias=AliasPath("album", "release_date")
-    )
+    track_uuid: Optional[UUID] = None
+    album_uuid: Optional[UUID] = None
+    song_title: Optional[str] = Field(None, alias=AliasPath("track", "name"))
+    title: Optional[str] = Field(None, alias=AliasPath("album", "title"))
+    artists: List["ArtistBase"] = Field(default_factory=list, alias=AliasPath("album", "artists"))
+    release_date: Optional[datetime] = Field(None, alias=AliasPath("album", "release_date"))
     image_thumbnail_url: Optional[str] = Field(None, alias=AliasPath("album", "image_thumbnail_url"))
     image_url: Optional[str] = Field(None, alias=AliasPath("album", "image_url"))
     full_update: Optional[bool] = False

@@ -77,11 +77,16 @@ class RedisSSEService:
 
                 # 🔹 Resolve canonical DB device
                 result = await db.execute(
-                    select(Device).where(Device.user_uuid == uuid_obj, Device.device_id == this_device_id)
+                    select(Device).where(
+                        Device.user_uuid == uuid_obj,
+                        Device.device_id == this_device_id
+                    )
                 )
                 db_device = result.scalars().first()
                 if not db_device:
-                    raise RuntimeError(f"Device {this_device_id} not found in DB for user {uuid_obj}")
+                    raise RuntimeError(
+                        f"Device {this_device_id} not found in DB for user {uuid_obj}"
+                    )
 
                 this_device_uuid = db_device.device_uuid
                 this_device_name = db_device.device_name
@@ -89,7 +94,7 @@ class RedisSSEService:
                 queue = self.add_client(uuid_obj, this_device_uuid, this_device_name)
 
                 # Load state
-                state = await service.get_state(uuid_obj)
+                state = await service.get_state(uuid_obj, device)
 
                 initial_payload = {
                     "rev": 1,
@@ -119,7 +124,17 @@ class RedisSSEService:
                     }
                     initial_payload["play_state"] = "paused"
 
-                # 🔹 inject active devices snapshot
+                # 🔹 Active device snapshot from DB, not just memory
+                result = await db.execute(
+                    select(PlaybackSession.active_device_uuid).where(
+                        PlaybackSession.user_uuid == uuid_obj
+                    )
+                )
+                active_device_uuid = result.scalar_one_or_none()
+                initial_payload["active_device_uuid"] = (
+                    str(active_device_uuid) if active_device_uuid else None
+                )
+
                 devices = [
                     {
                         "device_uuid": str(dev_uuid),
@@ -146,25 +161,20 @@ class RedisSSEService:
                     message = await asyncio.wait_for(queue.get(), timeout=5)
 
                     if isinstance(message, dict):
-                        # 🔹 Make per-client copy
                         msg_copy = copy.deepcopy(message)
-
                         msg_copy["this_device_uuid"] = str(this_device_uuid)
                         msg_copy["this_device_name"] = this_device_name
 
-                        # validate active device before sending
+                        # 🔹 Always resolve active_device_uuid from DB
                         result = await db.execute(
                             select(PlaybackSession.active_device_uuid).where(
                                 PlaybackSession.user_uuid == uuid_obj
                             )
                         )
                         active_device_uuid = result.scalar_one_or_none()
-                        if active_device_uuid and str(active_device_uuid) not in self._active_devices.get(uuid_obj, {}):
-                            logger.warning(
-                                f"⚠️ stream_function: Active device {active_device_uuid} is not in {self._active_devices.get(uuid_obj, {})}, overriding to None"
-                            )
-                            active_device_uuid = None
-                        msg_copy["active_device_uuid"] = str(active_device_uuid) if active_device_uuid else None
+                        msg_copy["active_device_uuid"] = (
+                            str(active_device_uuid) if active_device_uuid else None
+                        )
 
                         devices = [
                             {
@@ -249,25 +259,43 @@ class RedisSSEService:
 
 
 async def heartbeat_loop():
-    """Periodically publish playback heartbeats for all active sessions."""
-
+    """Periodically publish playback heartbeats for all active sessions.
+    Uses a Redis lock so only one worker runs this loop at a time.
+    """
+    lock_key = "heartbeat_lock"
+    lock_ttl = 10  # seconds
 
     while True:
         try:
-            db_gen = get_async_session()
-            db = await anext(db_gen)
-            try:
-                result = await db.execute(select(PlaybackSession.user_uuid))
-                user_ids = [row[0] for row in result.all()]
-                for user_uuid in user_ids:
-                    service = PlaybackService(db, redis_dep.redis_client)
-                    await service._publish_heartbeat(user_uuid)
-            finally:
-                await db_gen.aclose()
+            if redis_dep.redis_client is None:
+                await asyncio.sleep(5)
+                continue
+
+            # Try to acquire lock
+            got_lock = await redis_dep.redis_client.set(
+                lock_key,
+                "1",
+                ex=lock_ttl,
+                nx=True,  # only set if not exists
+            )
+
+            if got_lock:
+                db_gen = get_async_session()
+                db = await anext(db_gen)
+                try:
+                    result = await db.execute(select(PlaybackSession.user_uuid))
+                    user_ids = [row[0] for row in result.all()]
+                    for user_uuid in user_ids:
+                        service = PlaybackService(db, redis_dep.redis_client)
+                        await service._publish_heartbeat(user_uuid)
+                finally:
+                    await db_gen.aclose()
+
         except Exception as e:
             logger.error(f"💥 Heartbeat loop failed: {e}")
 
         await asyncio.sleep(5)  # every 5s
+
 
 
 # Singleton instance

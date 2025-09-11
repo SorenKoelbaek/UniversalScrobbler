@@ -97,10 +97,10 @@ class PlaybackService:
         return session.position_ms + elapsed_ms
 
     async def _get_or_create_session(
-        self,
-        user_uuid: UUID,
-        device_id: str | None = None,
-        device_name: str | None = None,
+            self,
+            user_uuid: UUID,
+            device_id: str | None = None,
+            device_name: str | None = None,
     ) -> PlaybackSession:
         result = await self.db.execute(
             select(PlaybackSession).where(PlaybackSession.user_uuid == user_uuid)
@@ -123,20 +123,20 @@ class PlaybackService:
                 device_name=device_name or "Unknown Device",
             )
 
-            # 🔹 Check against connected devices in Redis SSE
             from services.redis_sse_service import redis_sse_service
             active_devices = redis_sse_service._active_devices.get(user_uuid, {})
 
             if not session.active_device_uuid or str(session.active_device_uuid) not in active_devices:
-                old = session.active_device_uuid
                 session.active_device_uuid = device.device_uuid
                 self.db.add(session)
                 await self.db.commit()
+                await self.db.refresh(session)
                 logger.info(
-                    f"🔄 Active device switched {old} → {device.device_uuid} ({device.device_name}) for {user_uuid}"
+                    f"🔄 Active device set to {device.device_uuid} ({device.device_name}) for {user_uuid}"
                 )
 
         return session
+
     # --- controls -------------------------------------------------------------
 
     async def resume(self, user_uuid: UUID, device: dict | None = None) -> PlaybackQueueSimple:
@@ -293,20 +293,42 @@ class PlaybackService:
         )
         session = result.scalars().first()
 
-        if session and session.active_device_uuid:
+        if session:
             from services.redis_sse_service import redis_sse_service
             active_devices = redis_sse_service._active_devices.get(user_uuid, {})
-            if str(session.active_device_uuid) not in active_devices:
+
+            # --- clear ghost devices ---
+            if session.active_device_uuid and str(session.active_device_uuid) not in active_devices:
                 logger.warning(
-                    f"get_state function: ⚠️ Active device {session.active_device_uuid} is not in for {active_devices}, overriding…"
+                    f"get_state: clearing ghost active device {session.active_device_uuid} "
+                    f"for user={user_uuid} (known devices: {list(active_devices.keys())})"
                 )
-                # If we know the current device → take over
                 if device:
                     session.active_device_uuid = await self._ensure_device(user_uuid, device)
                 else:
                     session.active_device_uuid = None
-                self.db.add(session)
-                await self.db.commit()
+
+            # --- auto-claim if no active device ---
+            if not session.active_device_uuid and device:
+                claimed_uuid = await self._ensure_device(user_uuid, device)
+                session.active_device_uuid = claimed_uuid
+                logger.info(
+                    f"get_state: no active device, assigning {claimed_uuid} "
+                    f"({device['device_name']}) for user={user_uuid}"
+                )
+
+            # --- expire stale sessions ---
+            max_age_seconds = 300  # 5 minutes
+            age = (datetime.now(UTC) - session.updated_at).total_seconds()
+            if age > max_age_seconds and session.play_state == "playing":
+                logger.info(
+                    f"get_state: session for {user_uuid} expired after {age:.0f}s, forcing pause"
+                )
+                session.play_state = "paused"
+                session.position_ms = 0
+
+            self.db.add(session)
+            await self.db.commit()
 
         return state
 
