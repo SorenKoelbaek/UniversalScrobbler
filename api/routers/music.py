@@ -9,7 +9,7 @@ from sqlmodel import select
 from uuid import UUID
 from typing import Optional
 from fastapi.responses import FileResponse
-
+from services.listenbrainz_service import ListenBrainzService
 router = APIRouter(
     prefix="/music",
     tags=["music"]
@@ -76,3 +76,31 @@ async def search(
     """Search albums, artists, and tracks by name/title (ILIKE)."""
     music_service = MusicService(db)
     return await music_service.search(query=query, limit=limit, only_digital=only_digital)
+
+@router.get("/artists/{artist_uuid}/similar")
+async def get_similar_artists(
+    artist_uuid: UUID,
+    db: AsyncSession = Depends(get_async_session),
+    user: User = Depends(get_current_user),
+):
+    """
+    Fetch similar artists for a given artist.
+    Service handles all DB and external API logic.
+    """
+
+
+    lb_service = ListenBrainzService(db)
+    bridges = await lb_service.get_or_create_similar_artists(artist_uuid=artist_uuid)
+
+    return [
+        {
+            "artist_uuid": str(b.artist_uuid) if b.artist_uuid else None,
+            "reference_artist_uuid": str(b.reference_artist_uuid),
+            "score": b.score,
+            "reference_mbid": b.reference_mbid,
+            "comment": b.comment,
+            "type": b.type,
+            "fetched_at": b.fetched_at.isoformat(),
+        }
+        for b in bridges
+    ]

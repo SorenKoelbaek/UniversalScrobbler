@@ -1141,3 +1141,66 @@ class MusicBrainzService:
 
         await self.db.commit()
 
+    async def get_or_create_artist_by_mbid(
+            self,
+            musicbrainz_artist_id: str,
+            preload_release_groups: bool = True,
+            cache: Optional[dict] = None,
+    ) -> Artist:
+        """
+        Get or create an Artist by MusicBrainz MBID.
+        If missing, fetch from MusicBrainz API and persist.
+        Optionally preload all release groups (albums).
+        """
+
+        # Check cache first
+        if cache and musicbrainz_artist_id in cache:
+            return cache[musicbrainz_artist_id]
+
+        # Check DB
+        result = await self.db.execute(
+            select(Artist).where(Artist.musicbrainz_artist_id == musicbrainz_artist_id)
+        )
+        artist = result.scalar_one_or_none()
+        if artist:
+            if cache is not None:
+                cache[musicbrainz_artist_id] = artist
+            return artist
+
+        # --- Fetch from MusicBrainz API ---
+        data = await self.api.get_artist(musicbrainz_artist_id, include_release_groups=preload_release_groups)
+        if not data:
+            raise ValueError(f"❌ Could not fetch artist {musicbrainz_artist_id} from MusicBrainz")
+
+        # Create new Artist
+        artist = Artist(
+            artist_uuid=uuid4(),
+            name=data.get("name"),
+            musicbrainz_artist_id=musicbrainz_artist_id,
+            profile=data.get("disambiguation"),  # store disambiguation in profile
+        )
+        self.db.add(artist)
+        await self.db.flush()
+
+        # --- Preload release groups if requested ---
+        if preload_release_groups:
+            for rg in data.get("release-groups", []):
+                album = await self.get_or_create_album_from_release_group_simple(rg)
+                # ensure Artist ↔ Album bridge
+                result = await self.db.execute(
+                    select(AlbumArtistBridge).where(
+                        AlbumArtistBridge.album_uuid == album.album_uuid,
+                        AlbumArtistBridge.artist_uuid == artist.artist_uuid,
+                    )
+                )
+                if not result.scalar_one_or_none():
+                    self.db.add(
+                        AlbumArtistBridge(album_uuid=album.album_uuid, artist_uuid=artist.artist_uuid)
+                    )
+
+        if cache is not None:
+            cache[musicbrainz_artist_id] = artist
+
+        await self.db.commit()
+        return artist
+

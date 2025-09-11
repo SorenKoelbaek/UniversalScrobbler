@@ -214,6 +214,8 @@ class ArtistRead(ArtistBase):
     class Config:
         from_attributes = True
 
+class RecommendedArtist(ArtistRead):
+    score: float
 
 class AlbumSimple(AlbumBase):
     artists: List[ArtistBase]

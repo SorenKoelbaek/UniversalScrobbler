@@ -186,6 +186,23 @@ class MusicBrainzAPI:
             return None
         return None
 
+    async def get_artist(self, artist_mbid: str, include_release_groups: bool = True) -> Optional[dict]:
+        """
+        Fetch a single artist from MusicBrainz by MBID.
+        Optionally include release groups for richer imports.
+        """
+        inc = "tags+genres"
+        if include_release_groups:
+            inc += "+release-groups"
+
+        params = {"fmt": "json", "inc": inc}
+        try:
+            data = await self._get(f"artist/{artist_mbid}", params)
+            return data
+        except httpx.HTTPError as e:
+            logger.error(f"❌ MusicBrainz get_artist failed for {artist_mbid}: {e}")
+            return None
+
 
 # Create a singleton instance
 musicbrainz_api = MusicBrainzAPI()

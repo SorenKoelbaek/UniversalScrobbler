@@ -52,7 +52,7 @@ class ListenBrainzAPI:
         self, artist_mbid: str
     ) -> Optional[str]:
         algorithm = "session_based_days_7500_session_300_contribution_5_threshold_10_limit_100_filter_True_skip_30"
-        params = {"artist_mbids": artist_mbid, "algorithm": "algorithm"}
+        params = {"artist_mbids": artist_mbid, "algorithm": algorithm}
 
         try:
             data = await self._get("similar-artists", params)

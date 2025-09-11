@@ -322,6 +322,28 @@ class TrackArtistBridge(SQLModel, table=True):
     track_uuid: UUID = Field(foreign_key="track.track_uuid", primary_key=True)
     artist_uuid: UUID = Field(foreign_key="artist.artist_uuid", primary_key=True)
 
+class SimilarArtistBridge(SQLModel, table=True):
+    __tablename__ = "similar_artist_bridge"
+
+    similar_artist_bridge_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
+    reference_artist_uuid: UUID = Field(foreign_key="artist.artist_uuid")
+    artist_uuid: UUID = Field(foreign_key="artist.artist_uuid")  # 👈 the "similar" artist
+    score: int
+    fetched_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Optional metadata from ListenBrainz
+    reference_mbid: Optional[str] = None
+    comment: Optional[str] = None
+    type: Optional[str] = None
+
+    # relationships
+    reference_artist: "Artist" = Relationship(
+        sa_relationship_kwargs={"primaryjoin": "SimilarArtistBridge.reference_artist_uuid==Artist.artist_uuid"}
+    )
+    similar_artist: "Artist" = Relationship(
+        sa_relationship_kwargs={"primaryjoin": "SimilarArtistBridge.artist_uuid==Artist.artist_uuid"}
+    )
+
 class Artist(SQLModel, table=True):
     __tablename__ = "artist"
     musicbrainz_artist_id: Optional[str] = Field(default=None, index=True)
@@ -351,6 +373,18 @@ class Artist(SQLModel, table=True):
     tracks: List["Track"] = Relationship(
         back_populates="artists",
         link_model=TrackArtistBridge
+    )
+    similar_artists: List["Artist"] = Relationship(
+        back_populates="similar_to",
+        link_model=SimilarArtistBridge,
+        sa_relationship_kwargs={"primaryjoin": "Artist.artist_uuid==SimilarArtistBridge.reference_artist_uuid",
+                                "secondaryjoin": "Artist.artist_uuid==SimilarArtistBridge.artist_uuid"},
+    )
+    similar_to: List["Artist"] = Relationship(
+        back_populates="similar_artists",
+        link_model=SimilarArtistBridge,
+        sa_relationship_kwargs={"primaryjoin": "Artist.artist_uuid==SimilarArtistBridge.artist_uuid",
+                                "secondaryjoin": "Artist.artist_uuid==SimilarArtistBridge.reference_artist_uuid"},
     )
     tags: List["Tag"] = Relationship(back_populates="artists", link_model=ArtistTagBridge)
     quality: Optional[str]
