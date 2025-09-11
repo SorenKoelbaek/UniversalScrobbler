@@ -48,7 +48,7 @@ class PlaybackService:
         threshold_240s = 240_000
         return position_ms >= min(threshold_50pct, threshold_240s)
 
-    async def _register_play_if_needed(self, user_uuid: UUID):
+    async def _register_play_if_needed(self, user_uuid: UUID, device: dict | None = None):
         """Check current track for eligibility and log if not already recorded."""
         session = await self._get_or_create_session(user_uuid)
         state = await self._get_queue(user_uuid)
@@ -61,7 +61,7 @@ class PlaybackService:
             .where(PlaybackQueue.playback_queue_uuid == queue_entry_id)
             .options(
                 selectinload(PlaybackQueue.track_version)
-                .selectinload(TrackVersion.track)  # 👈 ensure track is loaded
+                .selectinload(TrackVersion.track)
             )
         )
         pq = result.scalars().first()
@@ -70,10 +70,23 @@ class PlaybackService:
 
         track_version = pq.track_version
         track = track_version.track
-
         user = await self.db.get(User, user_uuid)
 
-        # ✅ Use active device from the session if available
+        # 🔹 Ensure we have a valid device before scrobble
+        if not session.active_device_uuid:
+            if device:
+                session.active_device_uuid = await self._ensure_device(user_uuid, device)
+                logger.info(
+                    f"_register_play_if_needed: claimed device {session.active_device_uuid} "
+                    f"for user={user_uuid} because session had none"
+                )
+            else:
+                logger.warning(
+                    f"_register_play_if_needed: no active device for user={user_uuid}, skipping scrobble"
+                )
+                return
+
+        # ✅ Insert playback history
         await self.listen_service.add_listen(
             user=user,
             track_version_uuid=track_version.track_version_uuid,
