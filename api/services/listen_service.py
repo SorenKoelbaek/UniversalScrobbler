@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from models.sqlmodels import PlaybackHistory, User, TrackVersion, Album, Artist
+from models.sqlmodels import PlaybackHistory, User, TrackVersion, Album, Artist, Track
 
 logger = logging.getLogger(__name__)
 
