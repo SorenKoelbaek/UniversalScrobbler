@@ -182,6 +182,21 @@ const handleJump = async (item) => {
     return () => ctrl.abort();
   }, [token]);
 
+  useEffect(() => {
+    if (!thisDevice) return;
+    const interval = setInterval(() => {
+      apiClient.post(
+        "/ping",
+        { device_uuid: thisDevice },
+        { headers: { Authorization: `Bearer ${token}` } }
+      ).catch((err) => {
+        console.warn("⚠️ Ping failed", err);
+      });
+    }, 15000); // every 15 seconds
+
+    return () => clearInterval(interval);
+  }, [thisDevice, token]);
+
   // --- Update local position
   useEffect(() => {
     const audio = audioRef.current;

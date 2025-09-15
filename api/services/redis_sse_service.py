@@ -4,7 +4,7 @@ import json
 import logging
 from uuid import UUID
 from typing import Dict
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timedelta
 from sqlmodel import select
 import dependencies.redis as redis_dep
 from dependencies.database import get_async_session
@@ -16,6 +16,7 @@ import copy
 
 logger = logging.getLogger(__name__)
 
+STALE_DEVICE_THRESHOLD = timedelta(seconds=60)  # tune as needed
 
 class RedisSSEService:
     """
@@ -31,31 +32,95 @@ class RedisSSEService:
         self._heartbeat_task: asyncio.Task | None = None
         self._active_devices: Dict[UUID, dict] = {}
 
-    def add_client(self, user_uuid: UUID, device_uuid: UUID, device_name: str) -> asyncio.Queue:
+    async def _cleanup_stale_devices(self):
+        """Mark devices as disconnected if they haven't been seen recently."""
+        try:
+            keys = await redis_dep.redis_client.keys("us:active_devices:*")
+            now = datetime.now(UTC)
+
+            for redis_key in keys:
+                raw_devices = await redis_dep.redis_client.hgetall(redis_key)
+
+                for dev_uuid, payload in raw_devices.items():
+                    try:
+                        meta = json.loads(payload)
+                    except Exception:
+                        continue
+
+                    # Parse last_seen
+                    try:
+                        last_seen = datetime.fromisoformat(meta.get("last_seen"))
+                    except Exception:
+                        last_seen = now
+
+                    if meta.get("connected") and last_seen < (now - STALE_DEVICE_THRESHOLD):
+                        meta["connected"] = False
+                        meta["last_seen"] = now.isoformat()
+                        await redis_dep.redis_client.hset(redis_key, dev_uuid, json.dumps(meta))
+                        logger.info(f"🧹 Cleaned up stale device {dev_uuid} in {redis_key}")
+        except Exception as e:
+            logger.error(f"💥 Failed during stale device cleanup: {e}")
+
+    async def add_client(self, user_uuid: UUID, device_uuid: UUID, device_name: str) -> asyncio.Queue:
         q = asyncio.Queue(maxsize=50)
         self._queues[(user_uuid, device_uuid)] = q
 
-        if user_uuid not in self._active_devices:
-            self._active_devices[user_uuid] = {}
-        self._active_devices[user_uuid][str(device_uuid)] = {
+        device_meta = {
             "name": device_name,
             "connected": True,
-            "last_seen": datetime.now(UTC),
+            "last_seen": datetime.now(UTC).isoformat(),
         }
+
+        if user_uuid not in self._active_devices:
+            self._active_devices[user_uuid] = {}
+        self._active_devices[user_uuid][str(device_uuid)] = device_meta
+
+        redis_key = f"us:active_devices:{user_uuid}"
+        await redis_dep.redis_client.hset(
+            redis_key,
+            str(device_uuid),
+            json.dumps(device_meta),
+        )
+
+        # Broadcast device list change to all clients of this user
+        await redis_dep.redis_client.publish(
+            f"us:user:{user_uuid}",
+            json.dumps({"type": "devices_changed"})
+        )
 
         logger.info(f"➕ Added device {device_name} ({device_uuid}) for {user_uuid}")
         return q
 
-    def remove_client(self, user_uuid: UUID, device_uuid: UUID) -> None:
+    async def remove_client(self, user_uuid: UUID, device_uuid: UUID) -> None:
+        # Remove local queue
         self._queues.pop((user_uuid, device_uuid), None)
 
         if user_uuid in self._active_devices and str(device_uuid) in self._active_devices[user_uuid]:
             self._active_devices[user_uuid][str(device_uuid)]["connected"] = False
-            self._active_devices[user_uuid][str(device_uuid)]["last_seen"] = datetime.now(UTC)
+            self._active_devices[user_uuid][str(device_uuid)]["last_seen"] = datetime.now(UTC).isoformat()
+            device_meta = self._active_devices[user_uuid][str(device_uuid)]
+        else:
+            device_meta = {
+                "name": "Unknown",
+                "connected": False,
+                "last_seen": datetime.now(UTC).isoformat(),
+            }
+
+        redis_key = f"us:active_devices:{user_uuid}"
+        await redis_dep.redis_client.hset(
+            redis_key,
+            str(device_uuid),
+            json.dumps(device_meta),
+        )
+
+        # ✅ Broadcast device list change to all clients of this user
+        await redis_dep.redis_client.publish(
+            f"us:user:{user_uuid}",
+            json.dumps({"type": "devices_changed"})
+        )
 
         logger.info(f"➖ Removed device {device_uuid} for {user_uuid}")
 
-    import copy
 
     async def stream(self, request: Request, user_uuid: str, device: dict | None = None):
         uuid_obj = UUID(user_uuid)
@@ -91,7 +156,7 @@ class RedisSSEService:
                 this_device_uuid = db_device.device_uuid
                 this_device_name = db_device.device_name
 
-                queue = self.add_client(uuid_obj, this_device_uuid, this_device_name)
+                queue = await self.add_client(uuid_obj, this_device_uuid, this_device_name)
 
                 # Load state
                 state = await service.get_state(uuid_obj, device)
@@ -135,15 +200,24 @@ class RedisSSEService:
                     str(active_device_uuid) if active_device_uuid else None
                 )
 
-                devices = [
-                    {
-                        "device_uuid": str(dev_uuid),
-                        "device_name": meta["name"],
-                        "connected": meta["connected"],
-                    }
-                    for dev_uuid, meta in self._active_devices.get(uuid_obj, {}).items()
-                    if meta["connected"]
-                ]
+                redis_key = f"us:active_devices:{uuid_obj}"
+                raw_devices = await redis_dep.redis_client.hgetall(redis_key)
+
+                devices = []
+                for dev_uuid, payload in raw_devices.items():
+                    try:
+                        meta = json.loads(payload)
+                    except Exception:
+                        logger.warning(f"⚠️ Corrupt device meta in Redis for {uuid_obj}/{dev_uuid}: {payload}")
+                        continue
+
+                    if meta.get("connected"):
+                        devices.append({
+                            "device_uuid": dev_uuid.decode() if isinstance(dev_uuid, bytes) else str(dev_uuid),
+                            "device_name": meta.get("name"),
+                            "connected": True,
+                        })
+
                 initial_payload["devices"] = devices
 
                 yield f"{json.dumps(jsonable_encoder(initial_payload))}\n\n"
@@ -165,6 +239,10 @@ class RedisSSEService:
                         msg_copy["this_device_uuid"] = str(this_device_uuid)
                         msg_copy["this_device_name"] = this_device_name
 
+                        # Normalize devices_changed → devices
+                        if msg_copy.get("type") == "devices_changed":
+                            msg_copy["type"] = "devices"
+
                         # 🔹 Always resolve active_device_uuid from DB
                         result = await db.execute(
                             select(PlaybackSession.active_device_uuid).where(
@@ -176,22 +254,31 @@ class RedisSSEService:
                             str(active_device_uuid) if active_device_uuid else None
                         )
 
-                        devices = [
-                            {
-                                "device_uuid": str(dev_uuid),
-                                "device_name": meta["name"],
-                                "connected": meta["connected"],
-                            }
-                            for dev_uuid, meta in self._active_devices.get(uuid_obj, {}).items()
-                            if meta["connected"]
-                        ]
+                        redis_key = f"us:active_devices:{uuid_obj}"
+                        raw_devices = await redis_dep.redis_client.hgetall(redis_key)
+
+                        devices = []
+                        for dev_uuid, payload in raw_devices.items():
+                            try:
+                                meta = json.loads(payload)
+                            except Exception:
+                                logger.warning(f"⚠️ Corrupt device meta in Redis for {uuid_obj}/{dev_uuid}: {payload}")
+                                continue
+
+                            if meta.get("connected"):
+                                devices.append({
+                                    "device_uuid": dev_uuid.decode() if isinstance(dev_uuid, bytes) else str(dev_uuid),
+                                    "device_name": meta.get("name"),
+                                    "connected": True,
+                                })
+
                         msg_copy["devices"] = devices
 
                         yield f"{json.dumps(jsonable_encoder(msg_copy))}\n\n"
                 except asyncio.TimeoutError:
                     yield ":\n\n"
         finally:
-            self.remove_client(uuid_obj, this_device_uuid)
+            await self.remove_client(uuid_obj, this_device_uuid)
 
     async def _listen(self):
         if redis_dep.redis_client is None:
@@ -295,6 +382,8 @@ async def heartbeat_loop():
             logger.error(f"💥 Heartbeat loop failed: {e}")
 
         await asyncio.sleep(5)  # every 5s
+        await redis_sse_service._cleanup_stale_devices()
+
 
 
 
