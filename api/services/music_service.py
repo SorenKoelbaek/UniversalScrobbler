@@ -28,6 +28,9 @@ from fastapi import HTTPException
 from typing import List, Optional
 import logging
 import re
+from dependencies.musicbrainz_api import MusicBrainzAPI
+from services.musicbrainz_service import MusicBrainzService
+musicbrainz_api = MusicBrainzAPI()
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +70,7 @@ class MusicService:
     # 🎵 Core album/artist/track queries
     # -------------------------------------------------------------------------
 
-    async def get_album(self, album_uuid: UUID) -> AlbumRead:
+    async def get_album(self, album_uuid: UUID, should_hydrate: bool = False) -> AlbumRead:
         stmt_album = (
             select(Album)
             .options(
@@ -84,6 +87,29 @@ class MusicService:
 
         if not album:
             raise HTTPException(status_code=404, detail="Album not found")
+        logger.info(album)
+        # 🔹 Auto-populate if shallow (no releases/tracks but has release_group_id)
+        if not album.releases and not album.tracks and album.musicbrainz_release_group_id and should_hydrate:
+            logger.info(f"Hydrating shallow album {album.title} ({album.musicbrainz_release_group_id})")
+            mb_service = MusicBrainzService(self.db, musicbrainz_api)
+            try:
+                await mb_service.add_release_tracks_to_shallow_album(album)
+
+                refreshed = await self.db.execute(
+                    select(Album)
+                    .execution_options(populate_existing=True)  # 👈 forces overwrite
+                    .options(
+                        selectinload(Album.tracks),
+                        selectinload(Album.artists),
+                        selectinload(Album.tags),
+                        selectinload(Album.types),
+                        selectinload(Album.releases),
+                    )
+                    .where(Album.album_uuid == album.album_uuid)
+                )
+                album = refreshed.scalar_one()
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to hydrate album {album.title}: {e}")
 
         album_read = AlbumRead.model_validate(album)
 
@@ -198,8 +224,6 @@ class MusicService:
         artist = result.scalar_one_or_none()
         if not artist:
             raise HTTPException(status_code=404, detail="Artist not found")
-
-        artist.albums = [album for album in artist.albums if album.tracks]
 
         tag_counts_result = await self.db.execute(
             select(ArtistTagBridge.tag_uuid, ArtistTagBridge.count).where(

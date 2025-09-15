@@ -18,12 +18,13 @@ router = APIRouter(
 @router.get("/albums/{album_uuid}", response_model=AlbumRead)
 async def get_album(
     album_uuid: UUID,
+    should_hydrate: bool = False,
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user),
 ):
     """Fetch a single album."""
     music_service = MusicService(db)
-    return await music_service.get_album(album_uuid)
+    return await music_service.get_album(album_uuid, should_hydrate)
 
 
 @router.get("/file/{library_track_uuid}")

@@ -1025,6 +1025,106 @@ class MusicBrainzService:
         await self.db.flush()
         return clone
 
+    async def add_release_tracks_to_shallow_album(
+        self,
+        album: Album,
+        should_take_duration: bool = False,
+    ) -> Optional[AlbumRelease]:
+        """
+        Populate a shallow Album (created only from a release_group) with
+        one concrete AlbumRelease and its tracks/versions.
+
+        - Chooses a "best" release from the release_group.
+        - Creates the AlbumRelease if missing.
+        - Always attempts to create Tracks/TrackVersions + bridges.
+        - Always tries to fetch cover art if missing.
+        - Idempotent: safe to run multiple times.
+        """
+
+        if not album.musicbrainz_release_group_id:
+            logger.warning(f"Album {album.album_uuid} has no release_group_id, cannot populate")
+            return None
+
+        # --- Fetch candidate releases from MB ---
+        try:
+            release_group_data = await self.api._get(
+                f"release-group/{album.musicbrainz_release_group_id}",
+                {"inc": "releases", "fmt": "json"},
+            )
+            releases = release_group_data.get("releases", [])
+        except Exception as e:
+            logger.error(f"Failed to fetch releases for RG {album.musicbrainz_release_group_id}: {e}")
+            return None
+
+        if not releases:
+            logger.warning(f"No releases found for release_group {album.musicbrainz_release_group_id}")
+            return None
+
+        # --- Pick best release (official, album, earliest date) ---
+        best = self.choose_best_release(releases)
+        if not best:
+            logger.warning(f"No suitable release candidate for album {album.title}")
+            return None
+
+        release_id = best["id"]
+
+        # --- Ensure AlbumRelease exists ---
+        result = await self.db.execute(
+            select(AlbumRelease).where(AlbumRelease.musicbrainz_release_id == release_id)
+        )
+        album_release = result.scalar_one_or_none()
+
+        if not album_release:
+            release_data = await self.api.get_release(release_id)
+            album_release = await self.create_album_release(album, release_data)
+
+        # --- Fetch recordings ---
+        recordings_data = await self.api.get_recordings_for_release(release_id)
+
+        # --- Ensure Tracks + Versions are populated ---
+        release_data = await self.api.get_release(release_id)  # full release data (media/tracks)
+        for media in release_data.get("media", []):
+            await self.create_tracks_and_versions_simple(
+                album,
+                album_release,
+                media.get("tracks", []),
+                recordings_data,
+                should_take_duration,
+            )
+
+        # --- Ensure cover art is set ---
+        if not album.image_url:
+            await self.fetch_album_image(album, cover_art_archive)
+        if not album_release.image_url:
+            await self.fetch_album_release_image(album_release, cover_art_archive)
+
+        await self.db.commit()
+
+        logger.info(f"Finished populating Album {album.title} with release {release_id}")
+        return album_release
+
+    def choose_best_release(self, releases: list[dict]) -> Optional[dict]:
+        """
+        Select the most appropriate release from a list of MB releases.
+        Heuristics:
+        - Must be 'Official'
+        - Prefer 'Album' format
+        - Earliest release date
+        """
+        official = [r for r in releases if r.get("status", "").lower() == "official"]
+        candidates = official or releases
+
+        # Prefer Album format
+        albums = [r for r in candidates if r.get("release-group", {}).get("primary-type") == "Album"]
+        candidates = albums or candidates
+
+        # Sort by date (earliest first)
+        def release_sort_key(r):
+            return r.get("date") or "9999-99-99"
+
+        candidates.sort(key=release_sort_key)
+        return candidates[0] if candidates else None
+
 
     async def link_release_to_collection(
             self,

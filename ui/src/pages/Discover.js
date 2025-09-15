@@ -20,15 +20,30 @@ import {
 import apiClient from "../utils/apiClient";
 import AlbumCard from "../components/AlbumCard";
 import AlbumGridCard from "../components/AlbumGridCard";
+import ArtistCarousel from "../components/ArtistCarousel"; // ⬅️ new component
 
 const Discover = () => {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState({ albums: [], artists: [], tracks: [] });
+  const [recommended, setRecommended] = useState([]); // ⬅️ hold recommended artists
   const [sortKey, setSortKey] = useState("title");
   const [sortDir, setSortDir] = useState("asc");
   const [viewMode, setViewMode] = useState("table");
+
+  // fetch recommended artists on mount
+  useEffect(() => {
+    const fetchRecommended = async () => {
+      try {
+        const res = await apiClient.get("/listen/recommended-artists");
+        setRecommended(res.data);
+      } catch (err) {
+        console.error("Failed to fetch recommended artists:", err);
+      }
+    };
+    fetchRecommended();
+  }, []);
 
   // debounce input
   useEffect(() => {
@@ -101,7 +116,10 @@ const Discover = () => {
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4 }}>
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+      {/* 🔥 Recommended section always on top */}
+      {recommended.length > 0 && <ArtistCarousel artists={recommended} />}
+
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2} mt={4}>
         <Typography variant="h5">Discover</Typography>
         <ToggleButtonGroup
           value={viewMode}

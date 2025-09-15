@@ -39,7 +39,7 @@ class PlaybackHistoryRead(PlaybackHistoryBase):
     track: "TrackBase"
     album: "AlbumSimple"
     device: DeviceBase
-
+    session_uuid: UUID | None = None
     class Config:
         from_attributes = True
 
@@ -47,6 +47,7 @@ class PlaybackHistoryRead(PlaybackHistoryBase):
 class PlaybackHistorySimple(PlaybackHistoryBase):
     track_uuid: Optional[UUID] = None
     album_uuid: Optional[UUID] = None
+    session_uuid: UUID | None = None
     song_title: Optional[str] = Field(None, alias=AliasPath("track", "name"))
     title: Optional[str] = Field(None, alias=AliasPath("album", "title"))
     artists: List["ArtistBase"] = Field(default_factory=list, alias=AliasPath("album", "artists"))
