@@ -2,7 +2,7 @@ from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy import func
 from typing import Optional, List
 from datetime import datetime, UTC,  timezone
-from sqlalchemy import BigInteger, Column, String, ForeignKeyConstraint, UniqueConstraint, Column, DateTime, Boolean
+from sqlalchemy import BigInteger, Column, String, ForeignKey, ForeignKeyConstraint, UniqueConstraint, Column, DateTime, Boolean
 from typing import Annotated
 from uuid import UUID, uuid4
 from datetime import datetime, date
@@ -546,7 +546,14 @@ class PlaybackQueue(SQLModel, table=True):
 
 class PlaybackSession(SQLModel, table=True):
     __tablename__ = "playback_session"
-    current_queue_uuid: UUID | None = Field(default=None, foreign_key="playback_queue.playback_queue_uuid")
+    current_queue_uuid: UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            PGUUID,
+            ForeignKey("playback_queue.playback_queue_uuid", ondelete="SET NULL"),
+            nullable=True,
+        ),
+    )
     session_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
     user_uuid: UUID = Field(foreign_key="appuser.user_uuid", nullable=False)
     play_state: str = Field(default="paused")
