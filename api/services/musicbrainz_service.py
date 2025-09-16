@@ -1025,6 +1025,126 @@ class MusicBrainzService:
         await self.db.flush()
         return clone
 
+    async def add_release_tracks_to_shallow_album(
+            self,
+            album: Album,
+            should_take_duration: bool = False,
+    ) -> Optional[AlbumRelease]:
+        """
+        Populate a shallow Album (created only from a release_group) with
+        its canonical AlbumRelease, Tracks, and TrackVersions.
+
+        Rules:
+        - Locate canonical release from the album's release_group_id using choose_best_release.
+        - Seed Album.tracks ONLY from the canonical release.
+        - Create TrackVersions linked to that AlbumRelease and to the Album's Tracks.
+        - Idempotent: safe to run multiple times, no duplicate Tracks on Album.
+        """
+
+        if not album.musicbrainz_release_group_id:
+            logger.warning(f"Album {album.album_uuid} has no release_group_id, cannot populate")
+            return None
+
+        # --- 1. Fetch candidate releases for this release_group ---
+        try:
+            release_group_data = await self.api._get(
+                f"release-group/{album.musicbrainz_release_group_id}",
+                {"inc": "releases", "fmt": "json"},
+            )
+            releases = release_group_data.get("releases", [])
+        except Exception as e:
+            logger.error(f"Failed to fetch releases for RG {album.musicbrainz_release_group_id}: {e}")
+            return None
+
+        if not releases:
+            logger.warning(f"No releases found for release_group {album.musicbrainz_release_group_id}")
+            return None
+
+        # --- 2. Pick canonical release (Official, Album, earliest date) ---
+        canonical = self.choose_best_release(releases)
+        if not canonical:
+            logger.warning(f"No canonical release found for album {album.title}")
+            return None
+
+        release_id = canonical["id"]
+
+        # --- 3. Ensure AlbumRelease exists (or create it) ---
+        release_data = await self.api.get_release(release_id)
+        result = await self.db.execute(
+            select(AlbumRelease).where(AlbumRelease.musicbrainz_release_id == release_id)
+        )
+        album_release = result.scalar_one_or_none()
+        if not album_release:
+            album_release = await self.create_album_release(album, release_data)
+
+        # --- 4. Guard: ensure canonical release has tracks ---
+        media_sections = release_data.get("media", [])
+        if not media_sections or not any(m.get("tracks") for m in media_sections):
+            logger.warning(f"Canonical release {release_id} for album {album.title} has no tracks, skipping hydration")
+            return album_release
+
+        # --- 5. Fetch recordings for this release ---
+        recordings_data = await self.api.get_recordings_for_release(release_id)
+
+        # --- 6. Create Tracks + TrackVersions from canonical release ---
+        for media in media_sections:
+            await self.create_tracks_and_versions_simple(
+                album,
+                album_release,
+                media.get("tracks", []),
+                recordings_data,
+                should_take_duration,
+            )
+
+        # --- 7. Ensure cover art ---
+        if not album.image_url:
+            await self.fetch_album_image(album, cover_art_archive)
+        if not album_release.image_url:
+            await self.fetch_album_release_image(album_release, cover_art_archive)
+
+        await self.db.commit()
+
+        logger.info(
+            f"Finished populating Album {album.title} "
+            f"with canonical release {release_id} ({album_release.album_release_uuid})"
+        )
+        return album_release
+
+    def choose_best_release(self, releases: list[dict]) -> Optional[dict]:
+        """
+        Select the canonical release from a list of MB releases.
+
+        Heuristics:
+        - Prefer 'Official' status
+        - Prefer release-group primary-type == 'Album'
+        - Sort by earliest release date
+        - Stable tie-breaking: (date, country, id)
+        """
+        if not releases:
+            return None
+
+        # 1. Only keep Official releases if available
+        candidates = [r for r in releases if r.get("status", "").lower() == "official"]
+        if not candidates:
+            candidates = releases
+
+        # 2. Prefer albums (not singles, EPs, compilations)
+        albums = [
+            r for r in candidates
+            if r.get("release-group", {}).get("primary-type", "").lower() == "album"
+        ]
+        candidates = albums or candidates
+
+        # 3. Sort by (date, country, id) to make deterministic
+        def release_sort_key(r: dict):
+            date = r.get("date") or "9999-99-99"
+            country = r.get("country") or "ZZ"
+            mbid = r.get("id") or ""
+            return (date, country, mbid)
+
+        candidates.sort(key=release_sort_key)
+
+        return candidates[0]
 
     async def link_release_to_collection(
             self,

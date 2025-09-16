@@ -56,23 +56,26 @@ const ListeningHistory = () => {
   const grouped = useMemo(() => {
     const groups = {};
     for (const listen of plays) {
-      if (!groups[listen.album_uuid]) {
-        groups[listen.album_uuid] = [];
-      }
-      groups[listen.album_uuid].push(listen);
+    const key = `${listen.album_uuid}-${listen.session_uuid}`; // 👈 composite key
+    if (!groups[key]) {
+      groups[key] = [];
+    }
+    groups[key].push(listen);
     }
     return Object.entries(groups)
-      .map(([album_uuid, listens]) => ({
-        album_uuid,
-        listens: listens.sort(
-          (a, b) => new Date(b.played_at) - new Date(a.played_at)
-        ),
-      }))
-      .sort(
-        (a, b) =>
-          new Date(b.listens[0].played_at) - new Date(a.listens[0].played_at)
-      );
-  }, [plays]);
+    .map(([key, listens]) => ({
+      key,
+      album_uuid: listens[0].album_uuid,
+      session_uuid: listens[0].session_uuid,
+      listens: listens.sort(
+        (a, b) => new Date(b.played_at) - new Date(a.played_at)
+      ),
+    }))
+    .sort(
+      (a, b) =>
+        new Date(b.listens[0].played_at) - new Date(a.listens[0].played_at)
+    );
+    }, [plays]);
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4 }}>
@@ -86,8 +89,8 @@ const ListeningHistory = () => {
         </Box>
       ) : (
         <>
-          {grouped.map(({ album_uuid, listens }) => (
-            <AlbumHistoryCard key={album_uuid} listens={listens} />
+          {grouped.map(({ key, listens }) => (
+            <AlbumHistoryCard key={key} listens={listens} />
           ))}
           <div ref={sentinelRef} style={{ height: 1 }} />
           {isFetchingMore && (

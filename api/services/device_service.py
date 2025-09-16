@@ -20,10 +20,14 @@ class DeviceService:
         """
         Set the active playback device for a user.
         """
-        result = await self.db.execute(
-            select(PlaybackSession).where(PlaybackSession.user_uuid == user_uuid)
+        result = await db.execute(
+            select(PlaybackSession)
+            .where(PlaybackSession.user_uuid == user_uuid)
+            .where(PlaybackSession.ended_at.is_(None))
+            .order_by(PlaybackSession.started_at.desc())
         )
         session = result.scalars().first()
+
         if not session:
             session = PlaybackSession(user_uuid=user_uuid)
 

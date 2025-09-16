@@ -82,7 +82,22 @@ class RedisSSEService:
             json.dumps(device_meta),
         )
 
-        # Broadcast device list change to all clients of this user
+
+        raw_devices = await redis_dep.redis_client.hgetall(redis_key)
+        connected = [
+            k for k, v in raw_devices.items()
+            if json.loads(v).get("connected")
+        ]
+        if len(connected) == 1:
+            db_gen = get_async_session()
+            db = await anext(db_gen)
+            try:
+                service = PlaybackService(db, redis_dep.redis_client)
+                await service.start_new_session(user_uuid)
+            finally:
+                await db_gen.aclose()
+
+
         await redis_dep.redis_client.publish(
             f"us:user:{user_uuid}",
             json.dumps({"type": "devices_changed"})
@@ -113,14 +128,28 @@ class RedisSSEService:
             json.dumps(device_meta),
         )
 
-        # ✅ Broadcast device list change to all clients of this user
+
+        raw_devices = await redis_dep.redis_client.hgetall(redis_key)
+        connected = [
+            k for k, v in raw_devices.items()
+            if json.loads(v).get("connected")
+        ]
+        if not connected:
+            db_gen = get_async_session()
+            db = await anext(db_gen)
+            try:
+                service = PlaybackService(db, redis_dep.redis_client)
+                await service.stop_session(user_uuid)
+            finally:
+                await db_gen.aclose()
+
+        # Broadcast device list change
         await redis_dep.redis_client.publish(
             f"us:user:{user_uuid}",
             json.dumps({"type": "devices_changed"})
         )
 
         logger.info(f"➖ Removed device {device_uuid} for {user_uuid}")
-
 
     async def stream(self, request: Request, user_uuid: str, device: dict | None = None):
         uuid_obj = UUID(user_uuid)
@@ -191,11 +220,13 @@ class RedisSSEService:
 
                 # 🔹 Active device snapshot from DB, not just memory
                 result = await db.execute(
-                    select(PlaybackSession.active_device_uuid).where(
-                        PlaybackSession.user_uuid == uuid_obj
-                    )
+                    select(PlaybackSession.active_device_uuid)
+                    .where(PlaybackSession.user_uuid == uuid_obj)
+                    .where(PlaybackSession.ended_at.is_(None))
+                    .order_by(PlaybackSession.started_at.desc())
                 )
-                active_device_uuid = result.scalar_one_or_none()
+                active_device_uuid = result.scalars().first()
+
                 initial_payload["active_device_uuid"] = (
                     str(active_device_uuid) if active_device_uuid else None
                 )
@@ -245,11 +276,13 @@ class RedisSSEService:
 
                         # 🔹 Always resolve active_device_uuid from DB
                         result = await db.execute(
-                            select(PlaybackSession.active_device_uuid).where(
-                                PlaybackSession.user_uuid == uuid_obj
-                            )
+                            select(PlaybackSession.active_device_uuid)
+                            .where(PlaybackSession.user_uuid == uuid_obj)
+                            .where(PlaybackSession.ended_at.is_(None))
+                            .order_by(PlaybackSession.started_at.desc())
                         )
-                        active_device_uuid = result.scalar_one_or_none()
+                        active_device_uuid = result.scalars().first()
+
                         msg_copy["active_device_uuid"] = (
                             str(active_device_uuid) if active_device_uuid else None
                         )

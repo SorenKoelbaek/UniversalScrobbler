@@ -27,6 +27,7 @@ class ListenService:
             user: User,
             track_version_uuid: UUID,
             device_uuid: UUID,
+            session_uuid: UUID | None = None,
             played_at: Optional[datetime] = None,
     ) -> PlaybackHistory:
         # fetch TrackVersion so we can resolve track + album + artists
@@ -54,6 +55,7 @@ class ListenService:
             track_uuid=track_version.track_uuid,
             album_uuid=album_uuid,
             device_uuid=device_uuid,
+            session_uuid=session_uuid,
             played_at=played_at or datetime.utcnow(),
         )
 
@@ -62,8 +64,9 @@ class ListenService:
         await self.db.refresh(history)
 
         logger.info(
-            f"🎧 Added listen user={user.username} track_version={track_version_uuid} "
-            f"track={track_version.track_uuid} album={album_uuid} device={device_uuid}"
+            f"🎧 Added listen user={user.username} "
+            f"track_version={track_version_uuid} track={track_version.track_uuid} "
+            f"album={album_uuid} device={device_uuid} session={session_uuid}"
         )
 
         # --- trigger similar artist caching inline ---
@@ -76,6 +79,7 @@ class ListenService:
             )
 
         return history
+
 
     # --- queries --------------------------------------------------------------
     async def get_recent_listens(
@@ -110,7 +114,7 @@ class ListenService:
         return result.scalars().all()
 
     async def get_user_recommended_artists(
-        self, user_uuid: UUID, limit: int = 15, days: int = 7
+            self, user_uuid: UUID, limit: int = 15, days: int = 7
     ) -> list[RecommendedArtist]:
         since = datetime.utcnow() - timedelta(days=days)
 
@@ -134,7 +138,7 @@ class ListenService:
             )
             .join(
                 TrackArtistBridge,
-                weight_subq.c.track_uuid == TrackArtistBridge.track_uuid
+                weight_subq.c.track_uuid == TrackArtistBridge.track_uuid,
             )
             .group_by(TrackArtistBridge.artist_uuid)
             .subquery()
@@ -153,19 +157,35 @@ class ListenService:
                 artist_weight_subq.c.reference_artist_uuid == SimilarArtistBridge.reference_artist_uuid,
             )
             .group_by(SimilarArtistBridge.artist_uuid)
-            .order_by(func.sum(artist_weight_subq.c.weight * SimilarArtistBridge.score).desc())
+            .order_by(
+                func.sum(artist_weight_subq.c.weight * SimilarArtistBridge.score).desc()
+            )
             .limit(limit)
         )
 
         result = await self.db.execute(stmt)
         rows = result.all()
 
-        # fetch artist details
+        # fetch artist details WITH relationships
         artist_uuids = [r[0] for r in rows if r[0] is not None]
         if not artist_uuids:
             return []
 
-        stmt = select(Artist).where(Artist.artist_uuid.in_(artist_uuids))
+        stmt = (
+            select(Artist)
+            .options(
+                selectinload(Artist.albums)
+                .selectinload(Album.releases),
+                selectinload(Artist.albums)
+                .selectinload(Album.tags),
+                selectinload(Artist.albums)
+                .selectinload(Album.types),
+                selectinload(Artist.album_releases),
+                selectinload(Artist.tags),
+            )
+            .where(Artist.artist_uuid.in_(artist_uuids))
+            .execution_options(populate_existing=True)  # ensures no stale relations
+        )
         res = await self.db.execute(stmt)
         artist_map = {a.artist_uuid: a for a in res.scalars().all()}
 

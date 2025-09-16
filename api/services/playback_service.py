@@ -12,7 +12,7 @@ from services.listen_service import ListenService
 from models.sqlmodels import (
     PlaybackQueue,
     PlaybackSession,
-    LibraryTrack,   # 🔄 replaced CollectionTrack
+    LibraryTrack,
     TrackVersion,
     Album,
     Artist,
@@ -21,6 +21,7 @@ from models.sqlmodels import (
     PlaybackHistory,
     User
 )
+from services.device_service import DeviceService
 from models.appmodels import (
     PlayRequest,
     PlaybackQueueSimple,
@@ -86,11 +87,12 @@ class PlaybackService:
                 )
                 return
 
-        # ✅ Insert playback history
+        # ✅ Insert playback history with session_uuid
         await self.listen_service.add_listen(
             user=user,
             track_version_uuid=track_version.track_version_uuid,
             device_uuid=session.active_device_uuid,
+            session_uuid=session.session_uuid,
             played_at=datetime.now(UTC),
         )
 
@@ -100,7 +102,8 @@ class PlaybackService:
 
         logger.info(
             f"✅ Registered play track={track.name} "
-            f"user={user_uuid} device={session.active_device_uuid}"
+            f"user={user_uuid} device={session.active_device_uuid} "
+            f"session={session.session_uuid}"
         )
 
     def _project_position(self, session: PlaybackSession) -> int:
@@ -109,26 +112,57 @@ class PlaybackService:
         elapsed_ms = int((datetime.now(UTC) - session.updated_at).total_seconds() * 1000)
         return session.position_ms + elapsed_ms
 
-    async def _get_or_create_session(
-            self,
-            user_uuid: UUID,
-            device_id: str | None = None,
-            device_name: str | None = None,
-    ) -> PlaybackSession:
+    async def start_new_session(self, user_uuid: UUID) -> PlaybackSession:
+        session = PlaybackSession(
+            user_uuid=user_uuid,
+            play_state="paused",
+            position_ms=0,
+            started_at=datetime.now(UTC),
+            ended_at=None,
+            current_registered=False,
+        )
+        self.db.add(session)
+        await self.db.commit()
+        await self.db.refresh(session)
+        logger.info(f"✨ Started new session {session.session_uuid} for {user_uuid}")
+        return session
+
+    async def stop_session(self, user_uuid: UUID) -> None:
+        """Mark the current session as ended."""
         result = await self.db.execute(
             select(PlaybackSession).where(PlaybackSession.user_uuid == user_uuid)
         )
         session = result.scalars().first()
-
-        if not session:
-            session = PlaybackSession(user_uuid=user_uuid)
+        if session and session.ended_at is None:
+            session.ended_at = datetime.now(UTC)
             self.db.add(session)
             await self.db.commit()
-            await self.db.refresh(session)
-            logger.debug(f"✨ Created new PlaybackSession for {user_uuid}")
+            logger.info(f"🛑 Stopped session {session.session_uuid} for {user_uuid}")
+        else:
+            return None
 
+    async def _get_or_create_session(
+        self,
+        user_uuid: UUID,
+        device_id: str | None = None,
+        device_name: str | None = None,
+    ) -> PlaybackSession:
+        from services.redis_sse_service import redis_sse_service
+
+        # 🔍 fetch the latest non-ended session
+        result = await self.db.execute(
+            select(PlaybackSession)
+            .where(PlaybackSession.user_uuid == user_uuid)
+            .where(PlaybackSession.ended_at.is_(None))
+            .order_by(PlaybackSession.started_at.desc())
+        )
+        session = result.scalars().first()
+
+        if not session:
+            session = await self.start_new_session(user_uuid)
+
+        # 🔗 Device claiming (still here, not removed!)
         if device_id:
-            from services.device_service import DeviceService
             device_service = DeviceService(self.db)
             device = await device_service.get_or_create_device(
                 user_uuid=user_uuid,
@@ -136,7 +170,6 @@ class PlaybackService:
                 device_name=device_name or "Unknown Device",
             )
 
-            from services.redis_sse_service import redis_sse_service
             active_devices = redis_sse_service._active_devices.get(user_uuid, {})
 
             if not session.active_device_uuid or str(session.active_device_uuid) not in active_devices:
@@ -149,6 +182,7 @@ class PlaybackService:
                 )
 
         return session
+
 
     # --- controls -------------------------------------------------------------
 
@@ -195,7 +229,10 @@ class PlaybackService:
         if event_type == "timeline":
             state = await self._get_queue(user_uuid)
             result = await self.db.execute(
-                select(PlaybackSession).where(PlaybackSession.user_uuid == user_uuid)
+                select(PlaybackSession)
+                .where(PlaybackSession.user_uuid == user_uuid)
+                .where(PlaybackSession.ended_at.is_(None))
+                .order_by(PlaybackSession.started_at.desc())
             )
             session = result.scalars().first()
 
@@ -299,15 +336,19 @@ class PlaybackService:
         )
 
     async def get_state(self, user_uuid: UUID, device: dict | None = None) -> PlaybackQueueSimple:
+        from services.redis_sse_service import redis_sse_service
+
         state = await self._get_queue(user_uuid)
 
         result = await self.db.execute(
-            select(PlaybackSession).where(PlaybackSession.user_uuid == user_uuid)
+            select(PlaybackSession)
+            .where(PlaybackSession.user_uuid == user_uuid)
+            .where(PlaybackSession.ended_at.is_(None))
+            .order_by(PlaybackSession.started_at.desc())
         )
         session = result.scalars().first()
 
         if session:
-            from services.redis_sse_service import redis_sse_service
             active_devices = redis_sse_service._active_devices.get(user_uuid, {})
 
             # --- clear ghost devices ---
@@ -347,7 +388,6 @@ class PlaybackService:
 
     async def _ensure_device(self, user_uuid: UUID, device: dict) -> UUID:
         """Make sure the device exists in DB and return its UUID."""
-        from services.device_service import DeviceService
         device_service = DeviceService(self.db)
         dev = await device_service.get_or_create_device(
             user_uuid=user_uuid,
@@ -591,9 +631,14 @@ class PlaybackService:
         if not state.now_playing:
             return None
         result = await self.db.execute(
-            select(PlaybackSession).where(PlaybackSession.user_uuid == user_uuid)
+            select(PlaybackSession)
+            .where(PlaybackSession.user_uuid == user_uuid)
+            .where(PlaybackSession.ended_at.is_(None))
+            .order_by(PlaybackSession.started_at.desc())
         )
         session = result.scalars().first()
+
+
         track = state.now_playing.track
         return NowPlayingEvent(
             track_uuid=track.track_uuid,

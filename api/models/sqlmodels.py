@@ -236,6 +236,7 @@ class PlaybackHistory(SQLModel, table=True):
             server_default="Streaming"
         )
     )
+    session_uuid: UUID | None = Field(foreign_key="playback_session.session_uuid")
     device_uuid: UUID = Field(foreign_key="device.device_uuid")
     device: Optional["Device"] = Relationship()
     user: Optional["User"] = Relationship()
@@ -547,13 +548,19 @@ class PlaybackSession(SQLModel, table=True):
     __tablename__ = "playback_session"
     current_queue_uuid: UUID | None = Field(default=None, foreign_key="playback_queue.playback_queue_uuid")
     session_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
-    user_uuid: UUID = Field(foreign_key="appuser.user_uuid", nullable=False, unique=True)
+    user_uuid: UUID = Field(foreign_key="appuser.user_uuid", nullable=False)
     play_state: str = Field(default="paused")
     position_ms: int = Field(default=0)
     active_device_uuid: UUID | None = Field(default=None, foreign_key="device.device_uuid")
     active_device: Optional["Device"] = Relationship()
     updated_at: datetime = Field(
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+    started_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), server_default=func.now()),  # 👈 consistent
+    )
+    ended_at: datetime | None = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=True)
     )
     current_registered: bool = Field(
         default=False,
