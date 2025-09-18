@@ -1,3 +1,4 @@
+// src/pages/AlbumDetail.js
 import React, { useEffect, useState } from "react";
 import {
   Box,
@@ -14,17 +15,19 @@ import {
 } from "@mui/material";
 import { useParams, Link } from "react-router-dom";
 import apiClient from "../utils/apiClient";
-import TagBubbleChart from "../components/TagBubbleChart";
 import TrackList from "../components/TrackList";
 import ReleaseList from "../components/ReleaseList";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import QueueMusicIcon from "@mui/icons-material/QueueMusic";
+import SimilarArtistCarousel from "../components/SimilarArtistCarousel";
 
 const AlbumDetail = () => {
   const { album_uuid } = useParams();
   const [album, setAlbum] = useState(null);
   const [loading, setLoading] = useState(true);
   const [hydrating, setHydrating] = useState(false);
+  const [similarAlbums, setSimilarAlbums] = useState([]);
+  const [loadingSimilar, setLoadingSimilar] = useState(true);
 
   const enrichAlbumIfNeeded = async (album) => {
     if (!album.discogs_master_id && !album.discogs_main_release_id) {
@@ -32,7 +35,7 @@ const AlbumDetail = () => {
         const response = await apiClient.post(
           `/discogs/enrich/album/${album.album_uuid}`
         );
-        setAlbum(response.data); // 💥 overwrite with enriched album
+        setAlbum(response.data);
       } catch (err) {
         console.warn("Discogs enrichment failed:", err);
       }
@@ -69,17 +72,17 @@ const AlbumDetail = () => {
       try {
         const response = await apiClient.get(`/music/albums/${album_uuid}`);
         const albumData = response.data;
-        setAlbum(albumData); // ✅ render instantly
+        setAlbum(albumData);
         enrichAlbumIfNeeded(albumData);
 
-        // 🔄 Lazy hydrate if tracks missing
+        // 🔄 Hydrate if tracks missing
         if (!albumData.tracks || albumData.tracks.length === 0) {
           setHydrating(true);
           try {
             const hydrated = await apiClient.get(
               `/music/albums/${album_uuid}?should_hydrate=true`
             );
-            setAlbum(hydrated.data); // ✅ overwrite when hydrated
+            setAlbum(hydrated.data);
           } catch (err) {
             console.error("Hydration failed:", err);
           } finally {
@@ -94,6 +97,48 @@ const AlbumDetail = () => {
     };
     fetchAlbum();
   }, [album_uuid]);
+
+  // 🎵 Fetch similar artists → pick their albums
+  useEffect(() => {
+    if (!album?.artists || album.artists.length === 0) return;
+
+    const fetchSimilar = async () => {
+      setLoadingSimilar(true);
+      try {
+        const response = await apiClient.get(
+          `/music/artists/${album.artists[0].artist_uuid}/similar`
+        );
+        const recs = response.data || [];
+
+        const seen = new Set();
+        const albums = [];
+
+        recs.slice(0, 5).forEach((sim) => {
+          sim.albums?.slice(0, 2).forEach((a) => {
+            if (!seen.has(a.album_uuid)) {
+              seen.add(a.album_uuid);
+              albums.push(a);
+            }
+          });
+        });
+
+        // Sort by release date (newest first)
+        albums.sort((a, b) => {
+          const dateA = a.release_date ? new Date(a.release_date) : new Date(0);
+          const dateB = b.release_date ? new Date(b.release_date) : new Date(0);
+          return dateB - dateA;
+        });
+
+        setSimilarAlbums(albums);
+      } catch (err) {
+        console.error("Failed to fetch similar artists:", err);
+      } finally {
+        setLoadingSimilar(false);
+      }
+    };
+
+    fetchSimilar();
+  }, [album]);
 
   if (loading) {
     return (
@@ -120,7 +165,7 @@ const AlbumDetail = () => {
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 8 }}>
       <Grid container spacing={4} alignItems="flex-start">
-        {/* Left column (1/3) */}
+        {/* Left column */}
         <Grid item xs={12} md={4}>
           <Card>
             <CardMedia
@@ -176,17 +221,9 @@ const AlbumDetail = () => {
               )}
             </CardContent>
           </Card>
-
-          {/* Tags */}
-          <Box mt={3}>
-            <Typography variant="h6">Tags</Typography>
-            <Box display="flex" flexWrap="wrap" gap={1} mt={1}>
-              <TagBubbleChart tags={album.tags} />
-            </Box>
-          </Box>
         </Grid>
 
-        {/* Right column (2/3) */}
+        {/* Right column */}
         <Grid item xs={12} md={8}>
           <Box mb={4}>
             {hydrating ? (
@@ -200,8 +237,19 @@ const AlbumDetail = () => {
           </Box>
 
           <Divider sx={{ my: 3 }} />
-
           <ReleaseList releases={album.releases} />
+
+          <Divider sx={{ my: 3 }} />
+
+          {loadingSimilar ? (
+            <Box display="flex" justifyContent="center" mt={2}>
+              <CircularProgress size={24} />
+            </Box>
+          ) : (
+            similarAlbums.length > 0 && (
+              <SimilarArtistCarousel albums={similarAlbums} />
+            )
+          )}
         </Grid>
       </Grid>
     </Container>

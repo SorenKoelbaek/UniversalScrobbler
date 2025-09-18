@@ -403,7 +403,11 @@ async def heartbeat_loop():
                 db_gen = get_async_session()
                 db = await anext(db_gen)
                 try:
-                    result = await db.execute(select(PlaybackSession.user_uuid))
+                    result = await db.execute(
+                        select(PlaybackSession.user_uuid)
+                        .where(PlaybackSession.ended_at.is_(None))
+                        .distinct()
+                    )
                     user_ids = [row[0] for row in result.all()]
                     for user_uuid in user_ids:
                         service = PlaybackService(db, redis_dep.redis_client)

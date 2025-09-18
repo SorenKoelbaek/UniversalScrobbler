@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from models.appmodels import AlbumRead, ArtistRead, TrackRead, MusicSearchResponse
+from models.appmodels import AlbumRead, ArtistRead, TrackRead, MusicSearchResponse, RecommendedArtist
 from services.music_service import MusicService
 from dependencies.database import get_async_session
 from dependencies.auth import get_current_user
@@ -78,7 +78,10 @@ async def search(
     music_service = MusicService(db)
     return await music_service.search(query=query, limit=limit, only_digital=only_digital)
 
-@router.get("/artists/{artist_uuid}/similar")
+@router.get(
+    "/artists/{artist_uuid}/similar",
+    response_model=list[RecommendedArtist]
+)
 async def get_similar_artists(
     artist_uuid: UUID,
     db: AsyncSession = Depends(get_async_session),
@@ -86,22 +89,18 @@ async def get_similar_artists(
 ):
     """
     Fetch similar artists for a given artist.
-    Service handles all DB and external API logic.
+    Returns full ArtistRead objects with score.
     """
-
-
     lb_service = ListenBrainzService(db)
     bridges = await lb_service.get_or_create_similar_artists(artist_uuid=artist_uuid)
 
-    return [
-        {
-            "artist_uuid": str(b.artist_uuid) if b.artist_uuid else None,
-            "reference_artist_uuid": str(b.reference_artist_uuid),
-            "score": b.score,
-            "reference_mbid": b.reference_mbid,
-            "comment": b.comment,
-            "type": b.type,
-            "fetched_at": b.fetched_at.isoformat(),
-        }
-        for b in bridges
-    ]
+    artists: list[RecommendedArtist] = []
+    for b in bridges:
+        if b.similar_artist:
+            artists.append(
+                RecommendedArtist(
+                    score=b.score,
+                    **b.similar_artist.__dict__,
+                )
+            )
+    return artists

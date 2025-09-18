@@ -1,3 +1,4 @@
+// src/pages/Discover.js
 import React, { useEffect, useState, useMemo } from "react";
 import {
   Container,
@@ -20,14 +21,14 @@ import {
 import apiClient from "../utils/apiClient";
 import AlbumCard from "../components/AlbumCard";
 import AlbumGridCard from "../components/AlbumGridCard";
-import ArtistCarousel from "../components/ArtistCarousel"; // ⬅️ new component
+import ArtistCarousel from "../components/ArtistCarousel";
 
 const Discover = () => {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState({ albums: [], artists: [], tracks: [] });
-  const [recommended, setRecommended] = useState([]); // ⬅️ hold recommended artists
+  const [recommended, setRecommended] = useState([]);
   const [sortKey, setSortKey] = useState("title");
   const [sortDir, setSortDir] = useState("asc");
   const [viewMode, setViewMode] = useState("table");
@@ -37,7 +38,15 @@ const Discover = () => {
     const fetchRecommended = async () => {
       try {
         const res = await apiClient.get("/listen/recommended-artists");
-        setRecommended(res.data);
+        // 🔒 Pre-pick 2 random albums once per artist
+        const withStableAlbums = res.data.map((artist) => {
+          if (!artist.albums || artist.albums.length === 0) {
+            return { ...artist, previewAlbums: [] };
+          }
+          const shuffled = [...artist.albums].sort(() => 0.5 - Math.random());
+          return { ...artist, previewAlbums: shuffled.slice(0, 2) };
+        });
+        setRecommended(withStableAlbums);
       } catch (err) {
         console.error("Failed to fetch recommended artists:", err);
       }
@@ -93,7 +102,6 @@ const Discover = () => {
     results.artists.forEach((artist) => artist.albums?.forEach(pushAlbum));
     results.tracks.forEach((track) => track.albums?.forEach(pushAlbum));
 
-    // sorting
     return merged.sort((a, b) => {
       const valA = a[sortKey];
       const valB = b[sortKey];
@@ -116,10 +124,8 @@ const Discover = () => {
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4 }}>
-      {/* 🔥 Recommended section always on top */}
-      {recommended.length > 0 && <ArtistCarousel artists={recommended} />}
-
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2} mt={4}>
+      {/* 🔍 Search box always visible */}
+      <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
         <Typography variant="h5">Discover</Typography>
         <ToggleButtonGroup
           value={viewMode}
@@ -137,62 +143,67 @@ const Discover = () => {
         placeholder="Search albums, artists, or tracks..."
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        sx={{ mb: 2 }}
+        sx={{ mb: 4 }}
       />
 
-      {loading ? (
-        <Box display="flex" justifyContent="center" mt={4}>
-          <CircularProgress />
-        </Box>
-      ) : albums.length === 0 ? (
-        <Typography variant="body1" align="center" mt={4}>
-          {debouncedSearch ? "No results found." : "Start typing to discover music."}
-        </Typography>
-      ) : viewMode === "table" ? (
-        <Paper>
-          <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Cover</TableCell>
-                  <TableCell></TableCell>
-                  <TableCell sortDirection={sortKey === "title" ? sortDir : false}>
-                    <TableSortLabel
-                      active={sortKey === "title"}
-                      direction={sortDir}
-                      onClick={() => handleSort("title")}
-                    >
-                      Title
-                    </TableSortLabel>
-                  </TableCell>
-                  <TableCell>Artist(s)</TableCell>
-                  <TableCell sortDirection={sortKey === "release_date" ? sortDir : false}>
-                    <TableSortLabel
-                      active={sortKey === "release_date"}
-                      direction={sortDir}
-                      onClick={() => handleSort("release_date")}
-                    >
-                      Release Date
-                    </TableSortLabel>
-                  </TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {albums.map((album) => (
-                  <AlbumCard key={album.album_uuid} albumRelease={album} />
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </Paper>
+      {/* 🎛 Conditional content */}
+      {debouncedSearch ? (
+        loading ? (
+          <Box display="flex" justifyContent="center" mt={4}>
+            <CircularProgress />
+          </Box>
+        ) : albums.length === 0 ? (
+          <Typography variant="body1" align="center" mt={4}>
+            No results found.
+          </Typography>
+        ) : viewMode === "table" ? (
+          <Paper>
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Cover</TableCell>
+                    <TableCell></TableCell>
+                    <TableCell sortDirection={sortKey === "title" ? sortDir : false}>
+                      <TableSortLabel
+                        active={sortKey === "title"}
+                        direction={sortDir}
+                        onClick={() => handleSort("title")}
+                      >
+                        Title
+                      </TableSortLabel>
+                    </TableCell>
+                    <TableCell>Artist(s)</TableCell>
+                    <TableCell sortDirection={sortKey === "release_date" ? sortDir : false}>
+                      <TableSortLabel
+                        active={sortKey === "release_date"}
+                        direction={sortDir}
+                        onClick={() => handleSort("release_date")}
+                      >
+                        Release Date
+                      </TableSortLabel>
+                    </TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {albums.map((album) => (
+                    <AlbumCard key={album.album_uuid} albumRelease={album} />
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+        ) : (
+          <Grid container spacing={2}>
+            {albums.map((album) => (
+              <Grid item key={album.album_uuid}>
+                <AlbumGridCard albumRelease={album} />
+              </Grid>
+            ))}
+          </Grid>
+        )
       ) : (
-        <Grid container spacing={2}>
-          {albums.map((album) => (
-            <Grid item key={album.album_uuid}>
-              <AlbumGridCard albumRelease={album} />
-            </Grid>
-          ))}
-        </Grid>
+        recommended.length > 0 && <ArtistCarousel artists={recommended} />
       )}
     </Container>
   );

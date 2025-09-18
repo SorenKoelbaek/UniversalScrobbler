@@ -6,7 +6,7 @@ from datetime import datetime, UTC
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
-from sqlmodel import select, delete
+from sqlmodel import select, delete, update
 from redis.asyncio import Redis
 from services.listen_service import ListenService
 from models.sqlmodels import (
@@ -142,14 +142,24 @@ class PlaybackService:
             return None
 
     async def _get_or_create_session(
-        self,
-        user_uuid: UUID,
-        device_id: str | None = None,
-        device_name: str | None = None,
+            self,
+            user_uuid: UUID,
+            device_id: str | None = None,
+            device_name: str | None = None,
     ) -> PlaybackSession:
         from services.redis_sse_service import redis_sse_service
+        from services.device_service import DeviceService  # assuming this is where it lives
 
-        # 🔍 fetch the latest non-ended session
+        # 🔒 Ensure at most one active session
+        await self.db.execute(
+            update(PlaybackSession)
+            .where(PlaybackSession.user_uuid == user_uuid)
+            .where(PlaybackSession.ended_at.is_(None))
+            .values(ended_at=datetime.now(UTC))
+        )
+        await self.db.commit()
+
+        # 🔍 fetch the latest non-ended session (after cleanup, should be none)
         result = await self.db.execute(
             select(PlaybackSession)
             .where(PlaybackSession.user_uuid == user_uuid)
@@ -161,7 +171,6 @@ class PlaybackService:
         if not session:
             session = await self.start_new_session(user_uuid)
 
-        # 🔗 Device claiming (still here, not removed!)
         if device_id:
             device_service = DeviceService(self.db)
             device = await device_service.get_or_create_device(
@@ -172,7 +181,10 @@ class PlaybackService:
 
             active_devices = redis_sse_service._active_devices.get(user_uuid, {})
 
-            if not session.active_device_uuid or str(session.active_device_uuid) not in active_devices:
+            if (
+                    not session.active_device_uuid
+                    or str(session.active_device_uuid) not in active_devices
+            ):
                 session.active_device_uuid = device.device_uuid
                 self.db.add(session)
                 await self.db.commit()
@@ -274,7 +286,7 @@ class PlaybackService:
 
         channel = f"us:user:{user_uuid}"
         await self.redis.publish(channel, json.dumps(payload))
-        logger.debug(f"💓 Heartbeat for {user_uuid}: {payload}")
+        logger.info(f"💓 published Heartbeat for {user_uuid}: {payload}")
     # --- queue handling -------------------------------------------------------
 
     async def _get_queue(self, user_uuid: UUID) -> PlaybackQueueSimple:

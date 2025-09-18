@@ -2,22 +2,38 @@ import logging
 from datetime import datetime, timedelta
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlmodel import select, delete
 from itertools import islice
 from dependencies.listenbrainz_api import listenbrainz_api
 from services.musicbrainz_service import MusicBrainzService
 from dependencies.musicbrainz_api import musicbrainz_api
-from models.sqlmodels import Artist, SimilarArtistBridge
+from models.sqlmodels import Artist, SimilarArtistBridge, Album
 
 logger = logging.getLogger(__name__)
-
 
 class ListenBrainzService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.mb_service = MusicBrainzService(db, api=musicbrainz_api)
 
+    from sqlalchemy.orm import selectinload
+    from sqlmodel import select, delete
+    from datetime import datetime, timedelta
+    from itertools import islice
+    from models.sqlmodels import Artist, SimilarArtistBridge
+    from dependencies.listenbrainz_api import listenbrainz_api
+    import logging
+
+    logger = logging.getLogger(__name__)
+
     async def get_or_create_similar_artists(self, artist_uuid: UUID) -> list[SimilarArtistBridge]:
+        """
+        Return SimilarArtistBridge rows (with .similar_artist and their albums eagerly loaded).
+        If cache is older than 30 days, refresh from ListenBrainz.
+        Skips unresolved artists instead of inserting NULL artist_uuid.
+        """
+
         # Step 1. resolve MBID of reference artist
         stmt = select(Artist).where(Artist.artist_uuid == artist_uuid)
         result = await self.db.execute(stmt)
@@ -29,9 +45,20 @@ class ListenBrainzService:
 
         artist_mbid = artist.musicbrainz_artist_id
 
-        # Step 2. check cache
-        stmt = select(SimilarArtistBridge).where(
-            SimilarArtistBridge.reference_artist_uuid == artist_uuid
+        # Step 2. check cache (with eager loading)
+        stmt = (
+            select(SimilarArtistBridge)
+            .where(SimilarArtistBridge.reference_artist_uuid == artist_uuid)
+            .options(
+                selectinload(SimilarArtistBridge.similar_artist)
+                .selectinload(Artist.albums)
+                .options(
+                    selectinload(Album.artists),
+                    selectinload(Album.types),
+                    selectinload(Album.releases),
+                ),
+                selectinload(SimilarArtistBridge.reference_artist),
+            )
         )
         result = await self.db.execute(stmt)
         rows = result.scalars().all()
@@ -54,18 +81,24 @@ class ListenBrainzService:
         )
 
         # Step 5. insert new rows
-        new_rows = []
-
+        new_rows: list[SimilarArtistBridge] = []
         for d in islice(data, 15):  # ✅ only process first 15
-            similar_artist_uuid = None
             mbid = d.get("artist_mbid")
+            db_artist = None
 
             if mbid:
-                # 🔑 Ensure artist exists in DB — create via MB service if missing
                 result = await self.db.execute(
                     select(Artist).where(Artist.musicbrainz_artist_id == mbid)
                 )
-                db_artist = result.scalar_one_or_none()
+                db_artists = result.scalars().all()
+
+                if len(db_artists) == 1:
+                    db_artist = db_artists[0]
+                elif len(db_artists) > 1:
+                    db_artist = db_artists[0]
+                    logger.warning(
+                        f"⚠️ Multiple artists with MBID {mbid}, using {db_artist.artist_uuid} ({db_artist.name})"
+                    )
 
                 if not db_artist:
                     try:
@@ -73,12 +106,13 @@ class ListenBrainzService:
                     except Exception as e:
                         logger.warning(f"⚠️ Failed to fetch MB artist {mbid}: {e}")
 
-                if db_artist:
-                    similar_artist_uuid = db_artist.artist_uuid
+            if not db_artist:
+                logger.debug(f"⏭ Skipping similar artist {mbid} (unresolved)")
+                continue
 
             sa = SimilarArtistBridge(
                 reference_artist_uuid=artist_uuid,
-                artist_uuid=similar_artist_uuid,
+                artist_uuid=db_artist.artist_uuid,
                 score=d.get("score", 0),
                 fetched_at=datetime.utcnow(),
                 reference_mbid=d.get("reference_mbid"),
@@ -89,4 +123,24 @@ class ListenBrainzService:
             new_rows.append(sa)
 
         await self.db.commit()
-        return new_rows
+
+        # Step 6. reload with albums eagerly loaded
+        stmt = (
+            select(SimilarArtistBridge)
+            .where(SimilarArtistBridge.reference_artist_uuid == artist_uuid)
+            .options(
+                selectinload(SimilarArtistBridge.similar_artist)
+                .selectinload(Artist.albums)
+                .options(
+                    selectinload(Album.artists),
+                    selectinload(Album.types),
+                    selectinload(Album.releases),
+                ),
+                selectinload(SimilarArtistBridge.reference_artist),
+            )
+        )
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
+
+
+
