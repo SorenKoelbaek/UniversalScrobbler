@@ -352,7 +352,9 @@ class SimilarArtistBridge(SQLModel, table=True):
 
 class Artist(SQLModel, table=True):
     __tablename__ = "artist"
-
+    __table_args__ = (
+        UniqueConstraint("musicbrainz_artist_id", name="uq_artist_mbid"),
+    )
     musicbrainz_artist_id: Optional[str] = Field(default=None, index=True)
     artist_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
     discogs_artist_id: Optional[int]
