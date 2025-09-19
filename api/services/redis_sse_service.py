@@ -32,14 +32,32 @@ class RedisSSEService:
         self._heartbeat_task: asyncio.Task | None = None
         self._active_devices: Dict[UUID, dict] = {}
 
+    async def _stop_session_if_no_devices(self, user_uuid: UUID):
+        redis_key = f"us:active_devices:{user_uuid}"
+        raw_devices = await redis_dep.redis_client.hgetall(redis_key)
+
+        connected = [
+            k for k, v in raw_devices.items()
+            if json.loads(v).get("connected")
+        ]
+
+        if not connected:
+            db_gen = get_async_session()
+            db = await anext(db_gen)
+            try:
+                service = PlaybackService(db, redis_dep.redis_client)
+                await service.stop_session(user_uuid)
+            finally:
+                await db_gen.aclose()
+
     async def _cleanup_stale_devices(self):
-        """Mark devices as disconnected if they haven't been seen recently."""
         try:
             keys = await redis_dep.redis_client.keys("us:active_devices:*")
             now = datetime.now(UTC)
 
             for redis_key in keys:
                 raw_devices = await redis_dep.redis_client.hgetall(redis_key)
+                user_uuid = UUID(redis_key.split(":")[-1])
 
                 for dev_uuid, payload in raw_devices.items():
                     try:
@@ -47,7 +65,6 @@ class RedisSSEService:
                     except Exception:
                         continue
 
-                    # Parse last_seen
                     try:
                         last_seen = datetime.fromisoformat(meta.get("last_seen"))
                     except Exception:
@@ -58,6 +75,10 @@ class RedisSSEService:
                         meta["last_seen"] = now.isoformat()
                         await redis_dep.redis_client.hset(redis_key, dev_uuid, json.dumps(meta))
                         logger.info(f"🧹 Cleaned up stale device {dev_uuid} in {redis_key}")
+
+                # 🔒 Unified check
+                await self._stop_session_if_no_devices(user_uuid)
+
         except Exception as e:
             logger.error(f"💥 Failed during stale device cleanup: {e}")
 
@@ -107,7 +128,6 @@ class RedisSSEService:
         return q
 
     async def remove_client(self, user_uuid: UUID, device_uuid: UUID) -> None:
-        # Remove local queue
         self._queues.pop((user_uuid, device_uuid), None)
 
         if user_uuid in self._active_devices and str(device_uuid) in self._active_devices[user_uuid]:
@@ -128,22 +148,9 @@ class RedisSSEService:
             json.dumps(device_meta),
         )
 
+        # 🔒 Unified check
+        await self._stop_session_if_no_devices(user_uuid)
 
-        raw_devices = await redis_dep.redis_client.hgetall(redis_key)
-        connected = [
-            k for k, v in raw_devices.items()
-            if json.loads(v).get("connected")
-        ]
-        if not connected:
-            db_gen = get_async_session()
-            db = await anext(db_gen)
-            try:
-                service = PlaybackService(db, redis_dep.redis_client)
-                await service.stop_session(user_uuid)
-            finally:
-                await db_gen.aclose()
-
-        # Broadcast device list change
         await redis_dep.redis_client.publish(
             f"us:user:{user_uuid}",
             json.dumps({"type": "devices_changed"})

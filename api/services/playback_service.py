@@ -142,24 +142,15 @@ class PlaybackService:
             return None
 
     async def _get_or_create_session(
-            self,
-            user_uuid: UUID,
-            device_id: str | None = None,
-            device_name: str | None = None,
+        self,
+        user_uuid: UUID,
+        device_id: str | None = None,
+        device_name: str | None = None,
     ) -> PlaybackSession:
         from services.redis_sse_service import redis_sse_service
-        from services.device_service import DeviceService  # assuming this is where it lives
+        from services.device_service import DeviceService
 
-        # 🔒 Ensure at most one active session
-        await self.db.execute(
-            update(PlaybackSession)
-            .where(PlaybackSession.user_uuid == user_uuid)
-            .where(PlaybackSession.ended_at.is_(None))
-            .values(ended_at=datetime.now(UTC))
-        )
-        await self.db.commit()
-
-        # 🔍 fetch the latest non-ended session (after cleanup, should be none)
+        # 🔍 fetch the latest active session
         result = await self.db.execute(
             select(PlaybackSession)
             .where(PlaybackSession.user_uuid == user_uuid)
@@ -168,9 +159,11 @@ class PlaybackService:
         )
         session = result.scalars().first()
 
+        # if no active session → create one
         if not session:
             session = await self.start_new_session(user_uuid)
 
+        # if we have a device_id → ensure device exists and possibly update active_device
         if device_id:
             device_service = DeviceService(self.db)
             device = await device_service.get_or_create_device(
@@ -182,8 +175,8 @@ class PlaybackService:
             active_devices = redis_sse_service._active_devices.get(user_uuid, {})
 
             if (
-                    not session.active_device_uuid
-                    or str(session.active_device_uuid) not in active_devices
+                not session.active_device_uuid
+                or str(session.active_device_uuid) not in active_devices
             ):
                 session.active_device_uuid = device.device_uuid
                 self.db.add(session)

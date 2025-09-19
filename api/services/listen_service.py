@@ -10,6 +10,7 @@ from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy import func
+from dependencies.database import async_session
 
 from models.appmodels import RecommendedArtist
 from models.sqlmodels import (
@@ -43,7 +44,6 @@ class ListenService:
         session_uuid: UUID | None = None,
         played_at: Optional[datetime] = None,
     ) -> PlaybackHistory:
-        # fetch TrackVersion so we can resolve track + album + artists
         stmt = (
             select(TrackVersion)
             .where(TrackVersion.track_version_uuid == track_version_uuid)
@@ -55,7 +55,6 @@ class ListenService:
         result = await self.db.execute(stmt)
         track_version = result.scalar_one()
 
-        # grab the first linked album (or None)
         album_uuid = (
             track_version.track.albums[0].album_uuid
             if track_version.track.albums
@@ -82,15 +81,15 @@ class ListenService:
             f"album={album_uuid} device={device_uuid} session={session_uuid}"
         )
 
-        # --- trigger similar artist caching inline ---
+        # run similar-artist caching in background with a fresh session
+        async def run_similar_fetch(artist_uuid: UUID):
+            async with async_session() as new_db:
+                lb_service = ListenBrainzService()
+                await lb_service.get_or_create_similar_artists(artist_uuid, new_db)
+
         for artist in track_version.track.artists:
-            if not artist.musicbrainz_artist_id:
-                continue
-            asyncio.create_task(
-                self.lb_service.get_or_create_similar_artists(
-                    artist.artist_uuid, self.db
-                )
-            )
+            if artist.musicbrainz_artist_id:
+                asyncio.create_task(run_similar_fetch(artist.artist_uuid))
 
         return history
 
