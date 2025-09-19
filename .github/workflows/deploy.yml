@@ -29,10 +29,11 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           cd ~/UniversalScrobbler
           git pull
+          sudo -S systemctl stop uvicorn.service
           cd api
           poetry install --no-root
           poetry run alembic upgrade head
           cd ../ui
           npm install
           npm run build
-          sudo -S systemctl restart uvicorn.service
+          sudo -S systemctl start uvicorn.service
