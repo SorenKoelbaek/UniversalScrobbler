@@ -14,7 +14,8 @@ if settings.LOCAL == 'true':
 
 
 def setup_logging():
-    log_level = logging.INFO if settings.LOCAL == 'true' else logging.WARNING
+    log_level = logging.INFO if settings.LOG_LEVEL == 'DEBUG' else logging.WARNING
+
 
     formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(message)s",
