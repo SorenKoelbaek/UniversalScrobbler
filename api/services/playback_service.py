@@ -185,6 +185,11 @@ class PlaybackService:
                 logger.info(
                     f"🔄 Active device set to {device.device_uuid} ({device.device_name}) for {user_uuid}"
                 )
+                logger.info(
+                    f"_get_or_create_session: session.active_device_uuid={session.active_device_uuid}, "
+                    f"active_devices={list(active_devices.keys())}"
+                )
+
 
         return session
 
