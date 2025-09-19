@@ -354,7 +354,14 @@ class PlaybackService:
         session = result.scalars().first()
 
         if session:
-            active_devices = redis_sse_service._active_devices.get(user_uuid, {})
+            # 🔹 fetch devices from Redis, not memory
+            redis_key = f"us:active_devices:{user_uuid}"
+            raw_devices = await self.redis.hgetall(redis_key)
+            active_devices = {
+                (k.decode() if isinstance(k, bytes) else str(k)): json.loads(v)
+                for k, v in raw_devices.items()
+                if v and json.loads(v).get("connected")
+            }
 
             # --- clear ghost devices ---
             if session.active_device_uuid and str(session.active_device_uuid) not in active_devices:
