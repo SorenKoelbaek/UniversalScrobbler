@@ -1,19 +1,26 @@
+# routes/music.py
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from models.appmodels import AlbumRead, ArtistRead, TrackRead, MusicSearchResponse, RecommendedArtist
+from uuid import UUID
+from fastapi.responses import FileResponse
+
+from models.appmodels import (
+    AlbumRead,
+    ArtistRead,
+    TrackRead,
+    MusicSearchResponse,
+    RecommendedArtist,
+)
 from services.music_service import MusicService
+from services.listenbrainz_service import ListenBrainzService
 from dependencies.database import get_async_session
 from dependencies.auth import get_current_user
 from models.sqlmodels import User, LibraryTrack
 from sqlmodel import select
-from uuid import UUID
-from typing import Optional
-from fastapi.responses import FileResponse
-from services.listenbrainz_service import ListenBrainzService
-router = APIRouter(
-    prefix="/music",
-    tags=["music"]
-)
+
+router = APIRouter(prefix="/music", tags=["music"])
+
 
 @router.get("/albums/{album_uuid}", response_model=AlbumRead)
 async def get_album(
@@ -22,17 +29,14 @@ async def get_album(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user),
 ):
-    """Fetch a single album."""
     music_service = MusicService(db)
     return await music_service.get_album(album_uuid, should_hydrate)
 
 
 @router.get("/file/{library_track_uuid}")
 async def stream_file(
-    library_track_uuid: UUID,
-    db: AsyncSession = Depends(get_async_session)
+    library_track_uuid: UUID, db: AsyncSession = Depends(get_async_session)
 ):
-    """Stream a file from the library by LibraryTrack UUID."""
     result = await db.execute(
         select(LibraryTrack).where(LibraryTrack.library_track_uuid == library_track_uuid)
     )
@@ -49,19 +53,16 @@ async def get_artist(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user),
 ):
-    """Fetch a single artist."""
     music_service = MusicService(db)
     return await music_service.get_artist(artist_uuid)
-
 
 
 @router.get("/tracks/{track_uuid}", response_model=TrackRead)
 async def get_track(
     track_uuid: UUID,
     db: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_current_user),
 ):
-    """Fetch a single track."""
     music_service = MusicService(db)
     return await music_service.get_track(track_uuid)
 
@@ -74,25 +75,18 @@ async def search(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user),
 ):
-    """Search albums, artists, and tracks by name/title (ILIKE)."""
     music_service = MusicService(db)
     return await music_service.search(query=query, limit=limit, only_digital=only_digital)
 
-@router.get(
-    "/artists/{artist_uuid}/similar",
-    response_model=list[RecommendedArtist]
-)
+
+@router.get("/artists/{artist_uuid}/similar", response_model=list[RecommendedArtist])
 async def get_similar_artists(
     artist_uuid: UUID,
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user),
 ):
-    """
-    Fetch similar artists for a given artist.
-    Returns full ArtistRead objects with score.
-    """
-    lb_service = ListenBrainzService(db)
-    bridges = await lb_service.get_or_create_similar_artists(artist_uuid=artist_uuid)
+    lb_service = ListenBrainzService()
+    bridges = await lb_service.get_or_create_similar_artists(artist_uuid, db)
 
     artists: list[RecommendedArtist] = []
     for b in bridges:

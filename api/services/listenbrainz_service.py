@@ -1,33 +1,35 @@
+# services/listenbrainz_service.py
+
 import logging
 from datetime import datetime, timedelta
+from itertools import islice
 from uuid import UUID
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlmodel import select, delete
-from itertools import islice
+
 from dependencies.listenbrainz_api import listenbrainz_api
-from services.musicbrainz_service import MusicBrainzService
 from dependencies.musicbrainz_api import musicbrainz_api
+from services.musicbrainz_service import MusicBrainzService
 from models.sqlmodels import Artist, SimilarArtistBridge, Album
 
 logger = logging.getLogger(__name__)
 
+
 class ListenBrainzService:
-    def __init__(self, db: AsyncSession):
-        self.db = db
-        self.mb_service = MusicBrainzService(db, api=musicbrainz_api)
+    """
+    Service for fetching and caching similar artists from ListenBrainz.
+    NOTE: We no longer keep a long-lived AsyncSession on self.
+    Each call uses the provided session explicitly, avoiding concurrent reuse.
+    """
 
-    from sqlalchemy.orm import selectinload
-    from sqlmodel import select, delete
-    from datetime import datetime, timedelta
-    from itertools import islice
-    from models.sqlmodels import Artist, SimilarArtistBridge
-    from dependencies.listenbrainz_api import listenbrainz_api
-    import logging
+    def __init__(self, mb_service_factory=MusicBrainzService):
+        self.mb_service_factory = mb_service_factory
 
-    logger = logging.getLogger(__name__)
-
-    async def get_or_create_similar_artists(self, artist_uuid: UUID) -> list[SimilarArtistBridge]:
+    async def get_or_create_similar_artists(
+        self, artist_uuid: UUID, db: AsyncSession
+    ) -> list[SimilarArtistBridge]:
         """
         Return SimilarArtistBridge rows (with .similar_artist and their albums eagerly loaded).
         If cache is older than 30 days, refresh from ListenBrainz.
@@ -36,7 +38,7 @@ class ListenBrainzService:
 
         # Step 1. resolve MBID of reference artist
         stmt = select(Artist).where(Artist.artist_uuid == artist_uuid)
-        result = await self.db.execute(stmt)
+        result = await db.execute(stmt)
         artist = result.scalar_one_or_none()
 
         if not artist or not artist.musicbrainz_artist_id:
@@ -60,7 +62,7 @@ class ListenBrainzService:
                 selectinload(SimilarArtistBridge.reference_artist),
             )
         )
-        result = await self.db.execute(stmt)
+        result = await db.execute(stmt)
         rows = result.scalars().all()
 
         if rows and rows[0].fetched_at > datetime.utcnow() - timedelta(days=30):
@@ -74,20 +76,22 @@ class ListenBrainzService:
             return rows  # return stale cache if present
 
         # Step 4. clear old cache
-        await self.db.execute(
+        await db.execute(
             delete(SimilarArtistBridge).where(
                 SimilarArtistBridge.reference_artist_uuid == artist_uuid
             )
         )
 
         # Step 5. insert new rows
+        mb_service = self.mb_service_factory(db, api=musicbrainz_api)
         new_rows: list[SimilarArtistBridge] = []
+
         for d in islice(data, 15):  # ✅ only process first 15
             mbid = d.get("artist_mbid")
             db_artist = None
 
             if mbid:
-                result = await self.db.execute(
+                result = await db.execute(
                     select(Artist).where(Artist.musicbrainz_artist_id == mbid)
                 )
                 db_artists = result.scalars().all()
@@ -102,7 +106,7 @@ class ListenBrainzService:
 
                 if not db_artist:
                     try:
-                        db_artist = await self.mb_service.get_or_create_artist_by_mbid(mbid)
+                        db_artist = await mb_service.get_or_create_artist_by_mbid(mbid)
                     except Exception as e:
                         logger.warning(f"⚠️ Failed to fetch MB artist {mbid}: {e}")
 
@@ -119,28 +123,11 @@ class ListenBrainzService:
                 comment=d.get("comment"),
                 type=d.get("type"),
             )
-            self.db.add(sa)
+            db.add(sa)
             new_rows.append(sa)
 
-        await self.db.commit()
+        await db.commit()
 
         # Step 6. reload with albums eagerly loaded
-        stmt = (
-            select(SimilarArtistBridge)
-            .where(SimilarArtistBridge.reference_artist_uuid == artist_uuid)
-            .options(
-                selectinload(SimilarArtistBridge.similar_artist)
-                .selectinload(Artist.albums)
-                .options(
-                    selectinload(Album.artists),
-                    selectinload(Album.types),
-                    selectinload(Album.releases),
-                ),
-                selectinload(SimilarArtistBridge.reference_artist),
-            )
-        )
-        result = await self.db.execute(stmt)
+        result = await db.execute(stmt)
         return result.scalars().all()
-
-
-

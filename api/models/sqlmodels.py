@@ -328,25 +328,31 @@ class SimilarArtistBridge(SQLModel, table=True):
 
     similar_artist_bridge_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
     reference_artist_uuid: UUID = Field(foreign_key="artist.artist_uuid")
-    artist_uuid: UUID = Field(foreign_key="artist.artist_uuid")  # 👈 the "similar" artist
+    artist_uuid: UUID = Field(foreign_key="artist.artist_uuid")
     score: int
     fetched_at: datetime = Field(default_factory=datetime.utcnow)
 
-    # Optional metadata from ListenBrainz
     reference_mbid: Optional[str] = None
     comment: Optional[str] = None
     type: Optional[str] = None
 
-    # relationships
     reference_artist: "Artist" = Relationship(
-        sa_relationship_kwargs={"primaryjoin": "SimilarArtistBridge.reference_artist_uuid==Artist.artist_uuid"}
+        sa_relationship_kwargs={
+            "primaryjoin": "SimilarArtistBridge.reference_artist_uuid==Artist.artist_uuid",
+            "overlaps": "similar_artists,similar_to",
+        }
     )
     similar_artist: "Artist" = Relationship(
-        sa_relationship_kwargs={"primaryjoin": "SimilarArtistBridge.artist_uuid==Artist.artist_uuid"}
+        sa_relationship_kwargs={
+            "primaryjoin": "SimilarArtistBridge.artist_uuid==Artist.artist_uuid",
+            "overlaps": "similar_artists,similar_to",
+        }
     )
+
 
 class Artist(SQLModel, table=True):
     __tablename__ = "artist"
+
     musicbrainz_artist_id: Optional[str] = Field(default=None, index=True)
     artist_uuid: UUID = Field(default_factory=uuid4, primary_key=True)
     discogs_artist_id: Optional[int]
@@ -356,39 +362,57 @@ class Artist(SQLModel, table=True):
     created_at: datetime = Field(
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
+
     albums: List["Album"] = Relationship(back_populates="artists", link_model=AlbumArtistBridge)
     album_releases: Optional[List["AlbumRelease"]] = Relationship(back_populates="artists", link_model=AlbumReleaseArtistBridge)
-    # self-referencing links
+
     members: List["Artist"] = Relationship(
         back_populates="part_of",
         link_model=ArtistBridge,
-        sa_relationship_kwargs={"primaryjoin": "Artist.artist_uuid==ArtistBridge.parent_artist_uuid",
-                                "secondaryjoin": "Artist.artist_uuid==ArtistBridge.child_artist_uuid"},
+        sa_relationship_kwargs={
+            "primaryjoin": "Artist.artist_uuid==ArtistBridge.parent_artist_uuid",
+            "secondaryjoin": "Artist.artist_uuid==ArtistBridge.child_artist_uuid",
+            "overlaps": "part_of",
+        },
     )
     part_of: List["Artist"] = Relationship(
         back_populates="members",
         link_model=ArtistBridge,
-        sa_relationship_kwargs={"primaryjoin": "Artist.artist_uuid==ArtistBridge.child_artist_uuid",
-                                "secondaryjoin": "Artist.artist_uuid==ArtistBridge.parent_artist_uuid"},
+        sa_relationship_kwargs={
+            "primaryjoin": "Artist.artist_uuid==ArtistBridge.child_artist_uuid",
+            "secondaryjoin": "Artist.artist_uuid==ArtistBridge.parent_artist_uuid",
+            "overlaps": "members",
+        },
     )
+
     tracks: List["Track"] = Relationship(
         back_populates="artists",
         link_model=TrackArtistBridge
     )
+
     similar_artists: List["Artist"] = Relationship(
         back_populates="similar_to",
         link_model=SimilarArtistBridge,
-        sa_relationship_kwargs={"primaryjoin": "Artist.artist_uuid==SimilarArtistBridge.reference_artist_uuid",
-                                "secondaryjoin": "Artist.artist_uuid==SimilarArtistBridge.artist_uuid"},
+        sa_relationship_kwargs={
+            "primaryjoin": "Artist.artist_uuid==SimilarArtistBridge.reference_artist_uuid",
+            "secondaryjoin": "Artist.artist_uuid==SimilarArtistBridge.artist_uuid",
+            "overlaps": "similar_to,reference_artist,similar_artist",
+        },
     )
     similar_to: List["Artist"] = Relationship(
         back_populates="similar_artists",
         link_model=SimilarArtistBridge,
-        sa_relationship_kwargs={"primaryjoin": "Artist.artist_uuid==SimilarArtistBridge.artist_uuid",
-                                "secondaryjoin": "Artist.artist_uuid==SimilarArtistBridge.reference_artist_uuid"},
+        sa_relationship_kwargs={
+            "primaryjoin": "Artist.artist_uuid==SimilarArtistBridge.artist_uuid",
+            "secondaryjoin": "Artist.artist_uuid==SimilarArtistBridge.reference_artist_uuid",
+            "overlaps": "similar_artists,reference_artist,similar_artist",
+        },
     )
+
     tags: List["Tag"] = Relationship(back_populates="artists", link_model=ArtistTagBridge)
     quality: Optional[str]
+
+
 
 class Track(SQLModel, table=True):
     __tablename__ = "track"
@@ -481,14 +505,24 @@ class Collection(SQLModel, table=True):
     user_uuid: UUID = Field(foreign_key="appuser.user_uuid")
 
     user: Optional["User"] = Relationship(back_populates="collections")
-    albums: List["Album"] = Relationship(link_model=CollectionAlbumBridge)
+    albums: List["Album"] = Relationship(
+        link_model=CollectionAlbumBridge,
+        sa_relationship_kwargs={
+            "overlaps": "album,collectionalbumbridge",
+        },
+    )
     album_releases: List["AlbumRelease"] = Relationship(
-        link_model=CollectionAlbumReleaseBridge
+        link_model=CollectionAlbumReleaseBridge,
+        sa_relationship_kwargs={
+            "overlaps": "album_release",
+        },
     )
 
     created_at: datetime = Field(
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
+
+
 
 class LibraryTrack(SQLModel, table=True):
     __tablename__ = "library_track"

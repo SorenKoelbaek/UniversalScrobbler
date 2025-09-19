@@ -4,31 +4,44 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional, List
 from uuid import UUID
+import asyncio
+
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy import func
-from models.appmodels import RecommendedArtist
 
-from models.sqlmodels import PlaybackHistory, User, TrackVersion, Album, Track, SimilarArtistBridge, TrackArtistBridge, Artist
+from models.appmodels import RecommendedArtist
+from models.sqlmodels import (
+    PlaybackHistory,
+    User,
+    TrackVersion,
+    Album,
+    Track,
+    SimilarArtistBridge,
+    TrackArtistBridge,
+    Artist,
+)
 from services.listenbrainz_service import ListenBrainzService
+
 logger = logging.getLogger(__name__)
-import asyncio
+
 
 class ListenService:
     """Service for recording and retrieving playback history (scrobbles)."""
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.lb_service = ListenBrainzService(db)
+        self.lb_service = ListenBrainzService()
+
     # --- record listen --------------------------------------------------------
     async def add_listen(
-            self,
-            user: User,
-            track_version_uuid: UUID,
-            device_uuid: UUID,
-            session_uuid: UUID | None = None,
-            played_at: Optional[datetime] = None,
+        self,
+        user: User,
+        track_version_uuid: UUID,
+        device_uuid: UUID,
+        session_uuid: UUID | None = None,
+        played_at: Optional[datetime] = None,
     ) -> PlaybackHistory:
         # fetch TrackVersion so we can resolve track + album + artists
         stmt = (
@@ -73,18 +86,16 @@ class ListenService:
         for artist in track_version.track.artists:
             if not artist.musicbrainz_artist_id:
                 continue
-
             asyncio.create_task(
-                self.lb_service.get_or_create_similar_artists(artist.artist_uuid)
+                self.lb_service.get_or_create_similar_artists(
+                    artist.artist_uuid, self.db
+                )
             )
 
         return history
 
-
     # --- queries --------------------------------------------------------------
-    async def get_recent_listens(
-            self, user: User, days: int = 7
-    ) -> List[PlaybackHistory]:
+    async def get_recent_listens(self, user: User, days: int = 7) -> List[PlaybackHistory]:
         since = datetime.utcnow() - timedelta(days=days)
         stmt = (
             select(PlaybackHistory)
@@ -114,7 +125,7 @@ class ListenService:
         return result.scalars().all()
 
     async def get_user_recommended_artists(
-            self, user_uuid: UUID, limit: int = 15, days: int = 7
+        self, user_uuid: UUID, limit: int = 15, days: int = 7
     ) -> list[RecommendedArtist]:
         since = datetime.utcnow() - timedelta(days=days)
 
@@ -154,7 +165,8 @@ class ListenService:
             )
             .join(
                 artist_weight_subq,
-                artist_weight_subq.c.reference_artist_uuid == SimilarArtistBridge.reference_artist_uuid,
+                artist_weight_subq.c.reference_artist_uuid
+                == SimilarArtistBridge.reference_artist_uuid,
             )
             .group_by(SimilarArtistBridge.artist_uuid)
             .order_by(
@@ -174,22 +186,18 @@ class ListenService:
         stmt = (
             select(Artist)
             .options(
-                selectinload(Artist.albums)
-                .selectinload(Album.releases),
-                selectinload(Artist.albums)
-                .selectinload(Album.tags),
-                selectinload(Artist.albums)
-                .selectinload(Album.types),
+                selectinload(Artist.albums).selectinload(Album.releases),
+                selectinload(Artist.albums).selectinload(Album.tags),
+                selectinload(Artist.albums).selectinload(Album.types),
                 selectinload(Artist.album_releases),
                 selectinload(Artist.tags),
             )
             .where(Artist.artist_uuid.in_(artist_uuids))
-            .execution_options(populate_existing=True)  # ensures no stale relations
+            .execution_options(populate_existing=True)
         )
         res = await self.db.execute(stmt)
         artist_map = {a.artist_uuid: a for a in res.scalars().all()}
 
-        # build proper models
         return [
             RecommendedArtist(
                 **artist_map[artist_uuid].__dict__,
