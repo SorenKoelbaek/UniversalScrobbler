@@ -142,12 +142,11 @@ class PlaybackService:
             return None
 
     async def _get_or_create_session(
-        self,
-        user_uuid: UUID,
-        device_id: str | None = None,
-        device_name: str | None = None,
+            self,
+            user_uuid: UUID,
+            device_id: str | None = None,
+            device_name: str | None = None,
     ) -> PlaybackSession:
-        from services.redis_sse_service import redis_sse_service
         from services.device_service import DeviceService
 
         # 🔍 fetch the latest active session
@@ -172,11 +171,18 @@ class PlaybackService:
                 device_name=device_name or "Unknown Device",
             )
 
-            active_devices = redis_sse_service._active_devices.get(user_uuid, {})
+            # 🔹 fetch devices from Redis, not memory
+            redis_key = f"us:active_devices:{user_uuid}"
+            raw_devices = await self.redis.hgetall(redis_key)
+            active_devices = {
+                (k.decode() if isinstance(k, bytes) else str(k)): json.loads(v)
+                for k, v in raw_devices.items()
+                if v and json.loads(v).get("connected")
+            }
 
             if (
-                not session.active_device_uuid
-                or str(session.active_device_uuid) not in active_devices
+                    not session.active_device_uuid
+                    or str(session.active_device_uuid) not in active_devices
             ):
                 session.active_device_uuid = device.device_uuid
                 self.db.add(session)
@@ -190,9 +196,7 @@ class PlaybackService:
                     f"active_devices={list(active_devices.keys())}"
                 )
 
-
         return session
-
 
     # --- controls -------------------------------------------------------------
 
